@@ -1,0 +1,36 @@
+[package]
+name = "edgeguard-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+categories.workspace = true
+keywords.workspace = true
+description = "Core validation engine for EdgeGuard - physics-aware sensor data validation"
+
+[dependencies]
+serde = { workspace = true, optional = true }
+heapless = { workspace = true }
+libm = { workspace = true }
+fixed = { workspace = true, optional = true }
+log = { workspace = true, optional = true }
+defmt = { workspace = true, optional = true }
+thiserror-no-std = { workspace = true }
+
+[features]
+default = ["std"]
+std = ["serde", "log", "thiserror-no-std/std"]
+embedded = ["defmt", "fixed"]
+alloc = ["serde/alloc"]
+low_memory_tables = []
+high_precision_tables = []
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+
+# [[bench]]
+# name = "validation"
+# harness = false

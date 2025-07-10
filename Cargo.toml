@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = [
+    "edgeguard-core",
+    "edgeguard-schemas", 
+    "edgeguard-ml",
+    "edgeguard-connectors",
+]
+
+[workspace.package]
+version = "0.1.0"
+authors = ["EdgeGuard Contributors"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/edgeguard/edgeguard"
+homepage = "https://edgeguard.io"
+categories = ["embedded", "no-std", "science"]
+keywords = ["iot", "sensors", "validation", "edge", "physics"]
+
+[workspace.dependencies]
+# Core dependencies
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+thiserror-no-std = "2.0"
+heapless = "0.8"
+nb = "1.1"
+
+# Avro support
+apache-avro = { version = "0.16", default-features = false }
+
+# Compression
+lz4_flex = { version = "0.11", default-features = false }
+miniz_oxide = { version = "0.7", default-features = false }
+
+# Time handling
+fugit = "0.3"
+chrono = { version = "0.4", default-features = false }
+
+# Logging
+log = { version = "0.4", default-features = false }
+defmt = "0.3"
+
+# Math
+libm = "0.2"
+fixed = "1.24"
+cordic = "0.1"
+
+# Testing
+proptest = "1.4"
+criterion = "0.5"
+
+[profile.release]
+opt-level = "z"     # Optimize for size
+lto = true          # Enable Link Time Optimization
+codegen-units = 1   # Single codegen unit for better optimization
+strip = true        # Strip symbols
+panic = "abort"     # Smaller binary, no unwinding
+
+[profile.embedded]
+inherits = "release"
+opt-level = "s"     # Optimize for size with speed consideration
+debug = false       # No debug info

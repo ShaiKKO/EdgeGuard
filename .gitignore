@@ -1,0 +1,25 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs
+*.profraw
+*.profdata
+
+# Benchmark results
+criterion/
+
+# Build outputs
+build_tables
+build_tables_standalone

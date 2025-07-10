@@ -1,0 +1,33 @@
+[package]
+name = "edgeguard-connectors"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+categories.workspace = true
+keywords.workspace = true
+description = "IoT protocol connectors for EdgeGuard (MQTT, CoAP, HTTP)"
+
+[dependencies]
+# Core dependencies
+edgeguard-core = { path = "../edgeguard-core" }
+edgeguard-schemas = { path = "../edgeguard-schemas" }
+serde = { workspace = true }
+
+# Protocol support (all optional)
+rumqttc = { version = "0.24", optional = true }
+coap-lite = { version = "0.12", optional = true }
+
+# Async runtime (only with std)
+tokio = { version = "1.40", features = ["rt", "time"], optional = true }
+
+[features]
+default = ["std", "mqtt"]
+std = ["edgeguard-core/std", "tokio"]
+mqtt = ["rumqttc"]
+coap = ["coap-lite"]
+
+[dev-dependencies]
+tokio = { version = "1.40", features = ["full"] }

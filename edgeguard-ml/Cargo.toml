@@ -1,0 +1,27 @@
+[package]
+name = "edgeguard-ml"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+categories.workspace = true
+keywords.workspace = true
+description = "Lightweight anomaly detection for EdgeGuard using Isolation Forest"
+
+[dependencies]
+# Core dependencies
+edgeguard-core = { path = "../edgeguard-core" }
+serde = { workspace = true }
+
+# ML-specific (keeping it minimal for edge devices)
+libm = { workspace = true }
+heapless = { workspace = true }
+
+[features]
+default = ["std"]
+std = ["edgeguard-core/std"]
+
+[dev-dependencies]
+rand = "0.8"

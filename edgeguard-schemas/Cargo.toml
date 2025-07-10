@@ -1,0 +1,26 @@
+[package]
+name = "edgeguard-schemas"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+categories.workspace = true
+keywords.workspace = true
+description = "Avro schemas with physics constraints for EdgeGuard sensor validation"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+apache-avro = { workspace = true }
+thiserror-no-std = { workspace = true }
+
+# Include schemas as embedded resources
+include_dir = "0.7"
+
+[build-dependencies]
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3.10"
