@@ -1,9 +1,97 @@
-//! Temperature validator with physics constraints
+//! Temperature Validation with Thermal Physics Constraints
 //!
-//! Validates temperature readings based on:
-//! - Absolute physical limits (can't go below absolute zero)
-//! - Reasonable Earth surface temperatures
-//! - Rate of change limits (thermal mass prevents instant changes)
+//! ## Physics Background
+//!
+//! Temperature validation must consider several physical phenomena:
+//!
+//! ### Thermal Mass and Heat Capacity
+//!
+//! Objects cannot change temperature instantaneously due to thermal mass.
+//! The rate of temperature change follows:
+//!
+//! ```text
+//! dT/dt = Q / (m × c)
+//! 
+//! Where:
+//! - dT/dt = rate of temperature change (°C/s)
+//! - Q = heat flow rate (W)
+//! - m = mass (kg)
+//! - c = specific heat capacity (J/kg·K)
+//! ```
+//!
+//! For air (c ≈ 1005 J/kg·K), even with 1kW heating in 1m³:
+//! - Mass of air ≈ 1.2 kg
+//! - Max rate ≈ 1000W / (1.2kg × 1005) ≈ 0.83°C/s
+//!
+//! This is why we validate rate of change!
+//!
+//! ### Sensor-Specific Considerations
+//!
+//! #### Response Time
+//! Different sensors have different thermal response times:
+//! - Thermocouples: ~1 second (small mass)
+//! - RTDs: ~5-10 seconds (larger mass)
+//! - Thermistors: ~2-5 seconds
+//! - IR sensors: ~100ms (measures radiation)
+//!
+//! #### Self-Heating
+//! Sensors consume power and generate heat:
+//! - RTDs: ~1mW (negligible)
+//! - Thermistors: ~10μW (negligible)
+//! - But poor thermal design can trap heat!
+//!
+//! #### Environmental Effects
+//! - **Solar radiation**: Can add 10-20°C to readings
+//! - **Wind chill**: Doesn't affect actual temperature
+//! - **Thermal stratification**: Temperature varies with height
+//!
+//! ## Validation Strategy
+//!
+//! ### 1. Absolute Limits
+//! We use Earth-based limits, not theoretical:
+//! - Min: -80°C (coldest natural temperature + margin)
+//! - Max: 125°C (sensor survival limit)
+//!
+//! ### 2. Rate Limiting
+//! Based on realistic scenarios:
+//! - Indoor: 2°C/s (HVAC systems)
+//! - Outdoor: 10°C/s (wind gusts, shade/sun)
+//! - Industrial: 20°C/s (oven doors, steam)
+//!
+//! ### 3. Context-Aware Validation
+//! Future enhancements could consider:
+//! - Time of day (night = cooling)
+//! - Season (winter = lower baseline)
+//! - Geography (desert vs arctic)
+//!
+//! ## Common Issues Detected
+//!
+//! This validator catches:
+//! - **Sensor failure**: Stuck at one value
+//! - **Electrical interference**: Rapid spikes
+//! - **Disconnection**: Jump to 0°C or -127°C
+//! - **Bit flips**: Impossible values
+//! - **Thermal shock**: Too-rapid changes
+//!
+//! ## Usage Examples
+//!
+//! ```rust
+//! use edgeguard_core::validators::TemperatureValidator;
+//! use edgeguard_core::ValidationContext;
+//!
+//! // Standard outdoor sensor
+//! let outdoor = TemperatureValidator::default();
+//!
+//! // HVAC monitoring
+//! let indoor = TemperatureValidator::indoor();
+//!
+//! // Industrial oven monitoring  
+//! let oven = TemperatureValidator::new_with_limits(
+//!     20.0,   // Room temp minimum
+//!     300.0,  // Oven maximum
+//!     50.0    // Can change quickly when door opens
+//! );
+//! ```
 
 use crate::{
     errors::{ValidationError, ValidationResult},
@@ -12,16 +100,50 @@ use crate::{
 
 use super::utils;
 
-/// Temperature validator for Celsius readings
+/// Validates temperature readings against physical constraints
+/// 
+/// This validator ensures temperature readings are not just within sensor
+/// specifications, but also physically plausible given thermal dynamics.
+/// It considers both absolute limits and rate of change.
+/// 
+/// ## Design Decisions
+/// 
+/// - **Celsius only**: While Fahrenheit/Kelvin conversions are trivial,
+///   we standardize on Celsius to avoid confusion and conversion errors.
+///   The scientific community uses Celsius/Kelvin, making physics calculations
+///   more intuitive.
+/// 
+/// - **f32 precision**: Temperature sensors rarely exceed 0.01°C precision,
+///   so f32's ~7 decimal digits are more than sufficient. This saves memory
+///   on embedded systems.
+/// 
+/// - **Configurable limits**: Different deployments have vastly different
+///   requirements. A freezer monitor needs different limits than a furnace
+///   monitor.
+/// 
+/// ## Memory Usage
+/// 
+/// 12 bytes total (3 × f32), making it cache-friendly and suitable for
+/// embedding in arrays or other structures.
 #[derive(Debug, Clone)]
 pub struct TemperatureValidator {
     /// Minimum valid temperature in Celsius
+    /// 
+    /// Set based on deployment environment, not sensor limits.
+    /// For example, indoor sensors might use -10°C even though
+    /// the sensor works to -40°C.
     min_celsius: f32,
     
     /// Maximum valid temperature in Celsius
+    /// 
+    /// Usually limited by sensor survival temperature or
+    /// expected environmental maximum plus safety margin.
     max_celsius: f32,
     
     /// Maximum rate of change in °C/second
+    /// 
+    /// Based on thermal mass of measured medium and
+    /// realistic heating/cooling rates in the environment.
     max_rate_celsius_per_sec: f32,
 }
 

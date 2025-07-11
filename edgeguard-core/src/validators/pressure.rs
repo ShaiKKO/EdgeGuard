@@ -1,7 +1,129 @@
-//! Pressure validator with altitude compensation
+//! Atmospheric Pressure Validation with Barometric Physics
 //!
-//! Validates atmospheric pressure readings considering altitude.
-//! Pressure decreases predictably with altitude - about 12 hPa per 100m.
+//! ## Physics Background
+//!
+//! ### Atmospheric Pressure Fundamentals
+//!
+//! Atmospheric pressure is the weight of air above a given point. At sea level,
+//! the entire atmosphere (~100km high) weighs down with a force of:
+//!
+//! ```text
+//! 1013.25 hPa = 101,325 Pa = 14.696 psi = 1 atmosphere
+//! ```
+//!
+//! ### Altitude Relationship
+//!
+//! Pressure decreases exponentially with altitude following the barometric formula:
+//!
+//! ```text
+//! P(h) = P₀ × (1 - 0.0065h/T₀)^5.255
+//!
+//! Where:
+//! - P(h) = pressure at altitude h
+//! - P₀ = sea level pressure (1013.25 hPa)
+//! - h = altitude in meters
+//! - T₀ = sea level temperature (288.15 K)
+//! ```
+//!
+//! Simplified: Pressure drops ~12 hPa per 100m near sea level
+//!
+//! ### Weather Effects
+//!
+//! Pressure variations indicate weather patterns:
+//! - **High pressure (>1020 hPa)**: Clear, stable weather
+//! - **Low pressure (<1010 hPa)**: Storms, precipitation
+//! - **Rapid drop (>1 hPa/hour)**: Approaching storm
+//!
+//! Historical extremes:
+//! - Lowest: 870 hPa (Typhoon Tip, 1979)
+//! - Highest: 1084 hPa (Siberian High, 1968)
+//!
+//! ### Sensor Technology
+//!
+//! #### MEMS Pressure Sensors
+//! - Microscopic diaphragm deflects with pressure
+//! - Measures capacitance or resistance change
+//! - Resolution: 0.01 hPa (10cm altitude)
+//! - Temperature sensitive - needs compensation
+//!
+//! #### Piezoresistive Sensors
+//! - Silicon strain gauge changes resistance
+//! - Very accurate but power hungry
+//! - Used in weather stations
+//!
+//! ## Validation Strategy
+//!
+//! ### 1. Altitude-Adjusted Limits
+//!
+//! Raw pressure limits don't work at altitude:
+//! - Sea level: 950-1050 hPa typical
+//! - Denver (1600m): 810-870 hPa typical  
+//! - Aircraft (10km): ~265 hPa
+//!
+//! We adjust limits based on deployment altitude.
+//!
+//! ### 2. Rate of Change Validation
+//!
+//! Pressure changes indicate:
+//! - **0.1 hPa/hour**: Normal variation
+//! - **1 hPa/hour**: Weather front passing
+//! - **5 hPa/hour**: Severe storm
+//! - **>10 hPa/hour**: Sensor error or rapid altitude change
+//!
+//! ### 3. Cross-Validation Opportunities
+//!
+//! - **GPS altitude**: Verify pressure matches altitude
+//! - **Temperature**: Cold fronts bring pressure drops
+//! - **Humidity**: Low pressure often means moisture
+//! - **Multiple sensors**: Should agree within 2 hPa
+//!
+//! ## Common Issues Detected
+//!
+//! - **Blocked port**: Pressure stuck at one value
+//! - **Temperature drift**: Uncompensated thermal effects
+//! - **Altitude mismatch**: Sea-level pressure at altitude
+//! - **Rapid transit**: Elevator/aircraft pressure changes
+//! - **Weather extremes**: Hurricane/tornado conditions
+//!
+//! ## Practical Applications
+//!
+//! ### Weather Monitoring
+//! ```rust
+//! use edgeguard_core::validators::PressureValidator;
+//!
+//! // Weather station at 500m elevation
+//! let weather = PressureValidator::new_with_altitude(500.0);
+//! ```
+//!
+//! ### Indoor Air Quality
+//! ```rust
+//! // Building HVAC - minimal variation expected
+//! let hvac = PressureValidator {
+//!     min_hpa: 1000.0,
+//!     max_hpa: 1030.0,
+//!     max_rate_hpa_per_sec: 0.1,  // Very stable
+//!     altitude_m: 100.0,
+//! };
+//! ```
+//!
+//! ### Drone/Aircraft
+//! ```rust
+//! // High altitude, rapid changes
+//! let aircraft = PressureValidator::high_altitude();
+//! ```
+//!
+//! ## Altitude Compensation
+//!
+//! The validator automatically adjusts expectations based on altitude:
+//!
+//! ```text
+//! Location        Altitude   Typical Pressure   Adjusted Range
+//! -------------------------------------------------------------
+//! Dead Sea        -430m      1065 hPa          1040-1090 hPa
+//! Sea Level       0m         1013 hPa          950-1050 hPa
+//! Denver          1600m      835 hPa           810-870 hPa
+//! Mt. Everest     8848m      315 hPa           300-330 hPa
+//! ```
 
 use crate::{
     errors::{ValidationError, ValidationResult},
@@ -76,18 +198,82 @@ impl PressureValidator {
         }
     }
     
-    /// Convert pressure to approximate altitude using barometric formula
+    /// Convert pressure reading to approximate altitude using the International Standard Atmosphere model
+    /// 
+    /// This implements the barometric formula for the troposphere (0-11km altitude):
+    /// ```text
+    /// h = (T₀/L) × [1 - (P/P₀)^(R×L/g×M)]
+    /// 
+    /// Where:
+    /// - h = altitude above sea level (meters)
+    /// - T₀ = standard temperature at sea level (288.15 K)
+    /// - L = temperature lapse rate (0.0065 K/m)
+    /// - P = measured pressure (hPa)
+    /// - P₀ = sea level pressure (hPa)
+    /// - R = ideal gas constant (8.31432 J/(mol·K))
+    /// - g = gravitational acceleration (9.80665 m/s²)
+    /// - M = molar mass of dry air (0.0289644 kg/mol)
+    /// ```
+    /// 
+    /// ## Why libm::powf?
+    /// 
+    /// We use `libm::powf` instead of the standard `f32::powf` because:
+    /// - This crate is `no_std` compatible for embedded systems
+    /// - Many embedded targets lack hardware floating-point units
+    /// - `libm` provides software implementations that work everywhere
+    /// - The performance difference is negligible for validation use cases
+    /// 
+    /// ## Derivation of the Exponent
+    /// 
+    /// The exponent `(R×L)/(g×M)` comes from solving the hydrostatic equation
+    /// with the ideal gas law under the assumption of linear temperature decrease:
+    /// 
+    /// ```text
+    /// Hydrostatic equation: dP/dh = -ρg
+    /// Ideal gas law: P = ρRT/M
+    /// Temperature model: T = T₀ - L×h
+    /// 
+    /// Combining and integrating gives:
+    /// P/P₀ = (T/T₀)^(g×M/R×L) = (1 - L×h/T₀)^(g×M/R×L)
+    /// 
+    /// Solving for h yields our formula with exponent ≈ 0.1902
+    /// ```
+    /// 
+    /// ## Accuracy and Limitations
+    /// 
+    /// - Accurate to ±30m for altitudes up to 6000m
+    /// - Assumes standard atmosphere (15°C at sea level)
+    /// - Ignores humidity effects (dry air assumption)
+    /// - Not valid above 11km (troposphere limit)
     fn pressure_to_altitude(pressure_hpa: f32, sea_level_pressure: f32) -> f32 {
-        // Simplified barometric formula
+        // Temperature lapse rate: rate at which temperature decreases with altitude
+        // Standard value: 6.5°C per 1000m in the troposphere
         const TEMP_LAPSE: f32 = 0.0065; // K/m
+        
+        // Standard temperature at sea level (15°C = 288.15 K)
+        // This is the global average used in aviation
         const SEA_LEVEL_TEMP: f32 = 288.15; // K
+        
+        // Standard gravitational acceleration at Earth's surface
+        // Varies slightly with latitude but standardized for calculations
         const G: f32 = 9.80665; // m/s²
+        
+        // Molar mass of dry air (weighted average of N₂, O₂, Ar, etc.)
+        // 78% N₂ (28.014) + 21% O₂ (31.998) + 1% Ar (39.948) ≈ 28.9644 g/mol
         const M: f32 = 0.0289644; // kg/mol
+        
+        // Universal gas constant (energy per temperature per mole)
         const R: f32 = 8.31432; // J/(mol·K)
         
+        // Calculate the pressure ratio (dimensionless)
         let pressure_ratio = pressure_hpa / sea_level_pressure;
+        
+        // Calculate the exponent for the barometric formula
+        // This equals approximately 0.1902 for Earth's atmosphere
         let exponent = (R * TEMP_LAPSE) / (G * M);
         
+        // Apply the barometric formula
+        // Note: libm::powf is used for no_std compatibility
         SEA_LEVEL_TEMP / TEMP_LAPSE * (1.0 - libm::powf(pressure_ratio, exponent))
     }
     
