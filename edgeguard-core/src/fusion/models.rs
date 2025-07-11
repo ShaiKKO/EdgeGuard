@@ -631,7 +631,6 @@ pub mod sensor_models {
 /// These models provide non-linear state transition and measurement functions
 /// for use with the EKF implementation.
 pub mod ekf_models {
-    use super::*;
     use crate::fusion::kalman::{ExtendedKalmanFilter, KalmanConfig};
     use crate::fusion::matrix::Vector;
     use crate::fusion::FusionAlgorithm;
