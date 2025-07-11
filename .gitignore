@@ -1,25 +1,120 @@
-# Rust
+# Rust build artifacts
 target/
 Cargo.lock
 **/*.rs.bk
+*.pdb
 
-# IDE
+# Generated files
+edgeguard-core/generated_tables.rs
+edgeguard-core/high_precision_tables.rs
+edgeguard-core/low_memory_tables.rs
+edgeguard-core/build_tables
+
+# IDE and editor files
 .idea/
 .vscode/
 *.swp
 *.swo
-
-# OS
+*~
 .DS_Store
 Thumbs.db
 
-# Test outputs
+# Python artifacts (for ML module)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Testing and coverage
 *.profraw
 *.profdata
+coverage/
+tarpaulin-report.html
+cobertura.xml
 
-# Benchmark results
+# Benchmarking
 criterion/
+perf.data
+perf.data.old
+flamegraph.svg
 
-# Build outputs
-build_tables
-build_tables_standalone
+# Documentation build
+/target/doc
+/target/criterion
+
+# Embedded development
+.gdb_history
+openocd.log
+*.elf
+*.bin
+*.hex
+
+# Local environment
+.env
+.env.local
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.bak
+
+# OS specific
+.directory
+.Trash-*
+.nfs*
+
+# Project specific - build artifacts
+build/
+dist/
+*.wasm
+
+# MQTT/Network testing
+mosquitto.db
+mosquitto.log
+
+# Data files (but keep examples)
+*.csv
+*.json
+*.avro
+!examples/data/*.csv
+!examples/data/*.json
+!examples/data/*.avro
+
+# But always include our lookup table data
+!**/lookup_tables/**/*.rs
+
+# MacOS
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
