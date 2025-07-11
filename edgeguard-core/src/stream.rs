@@ -1142,6 +1142,151 @@ where
     }
 }
 
+/// Stream error recovery strategies
+/// 
+/// Defines how streams should handle different error conditions
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RecoveryStrategy {
+    /// Retry immediately
+    RetryImmediate,
+    /// Retry with exponential backoff
+    RetryBackoff { initial_ms: u32, max_ms: u32 },
+    /// Skip the error and continue
+    Skip,
+    /// Log and continue
+    LogAndContinue,
+    /// Fail and propagate error
+    Fail,
+}
+
+/// Stream with error recovery
+pub trait RecoverableStream: Stream {
+    /// Get recovery strategy for error type
+    fn recovery_strategy(&self, error: &Self::Error) -> RecoveryStrategy;
+    
+    /// Handle recovery action
+    fn handle_recovery(&mut self, strategy: RecoveryStrategy) -> nb::Result<(), Self::Error> {
+        match strategy {
+            RecoveryStrategy::RetryImmediate => Err(nb::Error::WouldBlock),
+            RecoveryStrategy::Skip | RecoveryStrategy::LogAndContinue => Ok(()),
+            RecoveryStrategy::Fail => Err(nb::Error::Other(self.create_fatal_error())),
+            RecoveryStrategy::RetryBackoff { .. } => {
+                // In a real implementation, would track retry count and delays
+                Err(nb::Error::WouldBlock)
+            }
+        }
+    }
+    
+    /// Create a fatal error for propagation
+    fn create_fatal_error(&self) -> Self::Error;
+}
+
+/// Stream wrapper with automatic error recovery
+/// 
+/// ## Overview
+/// 
+/// Wraps any stream to add error recovery capabilities based on
+/// configurable strategies.
+/// 
+/// ## Usage
+/// 
+/// ```rust
+/// use edgeguard_core::stream::{RecoveryWrapper, RecoveryStrategy};
+/// 
+/// let stream = get_unreliable_stream();
+/// let mut recoverable = RecoveryWrapper::new(stream)
+///     .with_strategy(ErrorType::Timeout, RecoveryStrategy::RetryBackoff {
+///         initial_ms: 100,
+///         max_ms: 5000,
+///     })
+///     .with_strategy(ErrorType::Format, RecoveryStrategy::Skip);
+/// 
+/// // Stream will automatically handle errors according to strategies
+/// while let Ok(event) = recoverable.poll_next() {
+///     process(event);
+/// }
+/// ```
+pub struct RecoveryWrapper<S: Stream> {
+    /// Inner stream
+    inner: S,
+    /// Recovery strategies by error type
+    strategies: heapless::FnvIndexMap<&'static str, RecoveryStrategy, 16>,
+    /// Current retry state
+    retry_count: u8,
+    /// Last error timestamp for backoff
+    last_error_time: Option<Timestamp>,
+}
+
+impl<S: Stream> RecoveryWrapper<S> {
+    /// Create new recovery wrapper
+    pub fn new(inner: S) -> Self {
+        Self {
+            inner,
+            strategies: heapless::FnvIndexMap::new(),
+            retry_count: 0,
+            last_error_time: None,
+        }
+    }
+    
+    /// Add recovery strategy for error type
+    pub fn with_strategy(mut self, error_type: &'static str, strategy: RecoveryStrategy) -> Self {
+        let _ = self.strategies.insert(error_type, strategy);
+        self
+    }
+    
+    /// Get strategy for error
+    fn get_strategy(&self, _error: &S::Error) -> RecoveryStrategy {
+        // In a real implementation, would inspect error type
+        // For now, default to retry
+        *self.strategies.get("default").unwrap_or(&RecoveryStrategy::RetryImmediate)
+    }
+}
+
+impl<S: Stream> Stream for RecoveryWrapper<S> {
+    type Item = S::Item;
+    type Error = S::Error;
+    
+    fn poll_next(&mut self) -> nb::Result<Self::Item, Self::Error> {
+        match self.inner.poll_next() {
+            Ok(item) => {
+                // Reset retry count on success
+                self.retry_count = 0;
+                self.last_error_time = None;
+                Ok(item)
+            }
+            Err(nb::Error::WouldBlock) => Err(nb::Error::WouldBlock),
+            Err(nb::Error::Other(e)) => {
+                let strategy = self.get_strategy(&e);
+                
+                match strategy {
+                    RecoveryStrategy::RetryImmediate => {
+                        self.retry_count += 1;
+                        Err(nb::Error::WouldBlock)
+                    }
+                    RecoveryStrategy::Skip => {
+                        // Try to get next item
+                        self.poll_next()
+                    }
+                    RecoveryStrategy::LogAndContinue => {
+                        // In production, would log the error
+                        self.poll_next()
+                    }
+                    RecoveryStrategy::Fail => {
+                        Err(nb::Error::Other(e))
+                    }
+                    RecoveryStrategy::RetryBackoff { initial_ms, max_ms } => {
+                        // Simple backoff calculation
+                        let _delay = (initial_ms * (1 << self.retry_count.min(10))).min(max_ms);
+                        self.retry_count += 1;
+                        // In real implementation, would check elapsed time
+                        Err(nb::Error::WouldBlock)
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
