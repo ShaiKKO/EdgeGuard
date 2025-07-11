@@ -1,10 +1,108 @@
-//! Time management for edge devices
+//! Time Management and Clock Abstraction for Edge Devices
 //!
-//! Provides clock abstraction to handle different time sources:
-//! - System clock (when available)
-//! - Monotonic counter (for rate calculations)
-//! - External RTC (for battery-backed time)
-//! - Network time (when connected)
+//! ## Overview
+//!
+//! Time handling on embedded systems is surprisingly complex. Unlike desktop systems
+//! with reliable system clocks, edge devices face numerous challenges:
+//!
+//! - **No Battery-Backed RTC**: Many devices lose time on power loss
+//! - **Clock Drift**: Crystal oscillators drift with temperature changes
+//! - **Time Jumps**: Network time sync can cause sudden adjustments
+//! - **Limited Resolution**: Some timers only provide millisecond precision
+//! - **Rollover**: 32-bit timers overflow after ~49 days
+//!
+//! This module provides abstractions to handle these challenges gracefully.
+//!
+//! ## Design Philosophy
+//!
+//! ### Multiple Time Sources
+//!
+//! We support different time sources for different purposes:
+//!
+//! 1. **Monotonic Time**: Always increases, ideal for rate calculations
+//!    - Unaffected by time adjustments
+//!    - Starts at 0 on boot
+//!    - May overflow on long-running systems
+//!
+//! 2. **Wall Clock Time**: Real-world time for timestamps
+//!    - May jump backwards/forwards during sync
+//!    - Lost on power cycle without RTC
+//!    - Required for data correlation
+//!
+//! 3. **External RTC**: Battery-backed hardware clock
+//!    - Survives power loss
+//!    - Often lower precision (1 second)
+//!    - May drift significantly
+//!
+//! ### Fallback Strategy
+//!
+//! The `TimeManager` implements a fallback chain:
+//! ```text
+//! Primary Source → Fallback Source → Last Known Good
+//!      ↓                ↓                  ↓
+//! Network Time    Monotonic Timer    Cached Value
+//! ```
+//!
+//! This ensures time always moves forward for rate calculations.
+//!
+//! ## Common Patterns
+//!
+//! ### Rate-of-Change Calculation
+//! ```rust
+//! use edgeguard_core::time::{TimeManager, MonotonicTime};
+//!
+//! let mut time_mgr = TimeManager::new(Box::new(MonotonicTime::new()));
+//! 
+//! let t1 = time_mgr.now();
+//! let v1 = 23.5; // First temperature reading
+//! 
+//! // ... some time passes ...
+//! 
+//! let t2 = time_mgr.now();
+//! let v2 = 24.0; // Second temperature reading
+//! 
+//! let rate = time_mgr.rate_per_second(v2 - v1, time_mgr.delta_ms(t1, t2));
+//! // rate = 0.5°C/second if 1 second passed
+//! ```
+//!
+//! ### Handling Time Jumps
+//! ```rust
+//! use edgeguard_core::time::{TimeManager, SystemTime, MonotonicTime};
+//! 
+//! // Use system time with monotonic fallback
+//! let time_mgr = TimeManager::new(Box::new(SystemTime))
+//!     .with_fallback(Box::new(MonotonicTime::new()));
+//! 
+//! // If system time jumps backwards (NTP sync), monotonic time is used
+//! ```
+//!
+//! ## Implementation Notes
+//!
+//! ### Timestamp Format
+//!
+//! We use milliseconds since epoch (u64) for timestamps:
+//! - Sufficient precision for sensor data (1ms)
+//! - No overflow for 584 million years
+//! - Compatible with most time libraries
+//! - Easy to convert to/from other formats
+//!
+//! ### Thread Safety
+//!
+//! Time sources must be Send + Sync if used across threads. The default
+//! implementations are thread-safe, but custom sources should ensure
+//! proper synchronization.
+//!
+//! ### Power Efficiency
+//!
+//! Reading time can wake sleeping peripherals. Cache timestamps when
+//! processing multiple readings in sequence:
+//!
+//! ```rust
+//! let now = time_mgr.now();
+//! for reading in sensor_batch {
+//!     reading.timestamp = now; // Reuse same timestamp
+//! }
+//! ```
 
 /// Timestamp in milliseconds since epoch (or device boot for monotonic)
 pub type Timestamp = u64;
@@ -21,9 +119,35 @@ pub trait TimeSource {
     fn precision_ms(&self) -> u32;
 }
 
-/// Monotonic time source using a counter
+/// Monotonic time source using a hardware counter
 /// 
-/// Starts at 0 on boot, always increases
+/// This time source provides a constantly increasing timestamp that is immune
+/// to system time adjustments. It's ideal for measuring intervals and calculating
+/// rates of change.
+/// 
+/// ## Characteristics
+/// - Starts at 0 when created (typically at boot)
+/// - Always increases (never goes backwards)
+/// - Unaffected by NTP adjustments or manual time changes
+/// - May wrap around on 32-bit systems after ~49 days
+/// 
+/// ## Hardware Implementation
+/// 
+/// On real hardware, this would read from:
+/// - ARM: SysTick timer or dedicated timer peripheral
+/// - ESP32: esp_timer_get_time() or FreeRTOS tick count
+/// - Linux: CLOCK_MONOTONIC via clock_gettime()
+/// 
+/// ## Example
+/// ```rust
+/// use edgeguard_core::time::{MonotonicTime, TimeSource};
+/// 
+/// let timer = MonotonicTime::new();
+/// let start = timer.now();
+/// // ... do some work ...
+/// let elapsed = timer.now() - start;
+/// println!("Operation took {} ms", elapsed);
+/// ```
 #[derive(Debug, Clone)]
 pub struct MonotonicTime {
     start_ms: Timestamp,

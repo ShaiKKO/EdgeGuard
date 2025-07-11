@@ -1,7 +1,80 @@
-//! Error types for validation failures
+//! Error Types for Physics-Based Validation Failures
 //!
-//! Keep errors small - they're often returned in hot paths.
-//! Each variant should clearly indicate what went wrong and why.
+//! ## Design Philosophy
+//!
+//! EdgeGuard's error system is designed with embedded systems in mind:
+//!
+//! 1. **Small Size**: Each error variant is kept minimal (typically 12-16 bytes) since
+//!    errors are returned in hot paths and may be stored in queues.
+//!
+//! 2. **No Heap Allocation**: All error data is inline - no String, only &'static str
+//!    for messages. This ensures deterministic memory usage.
+//!
+//! 3. **Copy Semantics**: Errors implement Copy for efficient return from functions
+//!    without move semantics complications.
+//!
+//! 4. **Actionable Information**: Each error provides enough context to determine
+//!    the appropriate response without needing additional queries.
+//!
+//! ## Error Categories
+//!
+//! Errors fall into three main categories:
+//!
+//! ### Physical Violations
+//! - `OutOfRange`: Value exceeds physical limits (e.g., -300°C temperature)
+//! - `RateExceeded`: Change too rapid for physics (e.g., 100°C/second)
+//! - `InvalidValue`: Mathematically invalid (NaN, infinity)
+//!
+//! ### Cross-Sensor Violations  
+//! - `CrossValidationFailed`: Multiple sensors disagree (e.g., impossible dew point)
+//!
+//! ### System Issues
+//! - `SensorQualityBad`: Sensor degraded or offline
+//! - `InsufficientData`: Not enough history for validation
+//!
+//! ## Error Handling Strategy
+//!
+//! ```rust
+//! use edgeguard_core::{ValidationError, Validator, TemperatureValidator, ValidationContext};
+//!
+//! fn handle_sensor_reading(value: f32, validator: &TemperatureValidator, ctx: &ValidationContext) {
+//!     match validator.validate(value, ctx) {
+//!         Ok(()) => {
+//!             // Reading is valid - proceed with normal processing
+//!             // send_to_cloud(value);
+//!         }
+//!         Err(ValidationError::OutOfRange { .. }) => {
+//!             // Sensor likely faulty - reading is impossible
+//!             // mark_sensor_faulty();
+//!         }
+//!         Err(ValidationError::RateExceeded { .. }) => {
+//!             // Possible electrical interference or sensor issue
+//!             // increment_anomaly_counter();
+//!         }
+//!         Err(ValidationError::CrossValidationFailed { .. }) => {
+//!             // Environmental conditions don't match physics
+//!             // trigger_recalibration();
+//!         }
+//!         Err(ValidationError::SensorQualityBad { .. }) => {
+//!             // Sensor needs maintenance
+//!             // schedule_maintenance();
+//!         }
+//!         _ => {
+//!             // Other errors - log and investigate
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! ## Memory Layout
+//!
+//! The largest error variant determines the enum size:
+//! ```text
+//! ValidationError size = 16 bytes
+//! ├── Discriminant: 1 byte
+//! ├── Largest variant (OutOfRange): 12 bytes
+//! └── Padding: 3 bytes
+//! ```
 
 use thiserror_no_std::Error;
 
@@ -14,15 +87,20 @@ pub enum ValidationError {
     /// Value outside physical limits
     #[error("Value {value} outside range [{min}, {max}]")]
     OutOfRange {
+        /// The actual sensor reading that failed validation
         value: f32,
+        /// Minimum acceptable value based on physics
         min: f32,
+        /// Maximum acceptable value based on physics
         max: f32,
     },
     
     /// Rate of change too high - indicates sensor malfunction or impossible physics
     #[error("Rate {rate}/s exceeds limit {max_rate}/s")]
     RateExceeded {
+        /// Calculated rate of change (units per second)
         rate: f32,
+        /// Maximum physically plausible rate
         max_rate: f32,
     },
     
@@ -45,7 +123,9 @@ pub enum ValidationError {
     /// Not enough historical data for validation
     #[error("Insufficient data: need {required}, have {available}")]
     InsufficientData {
+        /// Minimum number of samples needed for validation
         required: usize,
+        /// Actual number of samples available
         available: usize,
     },
 }
