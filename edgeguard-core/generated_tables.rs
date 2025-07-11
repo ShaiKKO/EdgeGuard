@@ -1,7 +1,7 @@
 // Auto-generated lookup tables for EdgeGuard
 // Configuration: STANDARD
 // Temperature: -40..50 step 5, Humidity: 0..100 step 10
-// Generated on: (generated)
+// Generated on: (use --timestamp for current time)
 
 /// Dew point table dimensions for STANDARD
 pub const DEW_POINT_STANDARD_ROWS: usize = 19;

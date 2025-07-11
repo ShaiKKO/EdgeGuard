@@ -1,14 +1,14 @@
 // Auto-generated lookup tables for EdgeGuard
-// Configuration: HIGH_PRECISION
+// Configuration: FINE_STEP
 // Temperature: -40..50 step 2, Humidity: 0..100 step 5
-// Generated on: (generated)
+// Generated on: (use --timestamp for current time)
 
-/// Dew point table dimensions for HIGH_PRECISION
-pub const DEW_POINT_HIGH_PRECISION_ROWS: usize = 46;
-pub const DEW_POINT_HIGH_PRECISION_COLS: usize = 21;
+/// Dew point table dimensions for FINE_STEP
+pub const DEW_POINT_FINE_STEP_ROWS: usize = 46;
+pub const DEW_POINT_FINE_STEP_COLS: usize = 21;
 
-/// Dew point values for HIGH_PRECISION configuration
-pub const DEW_POINT_VALUES_HIGH_PRECISION: [[i8; 21]; 46] = [
+/// Dew point values for FINE_STEP configuration
+pub const DEW_POINT_VALUES_FINE_STEP: [[i8; 21]; 46] = [
     // -40°C
     [-100, -65, -60, -57, -54, -52, -51, -50, -48, -47, -46, -46, -45, -44, -43, -43, -42, -42, -41, -40, -40],
     // -38°C
@@ -103,11 +103,11 @@ pub const DEW_POINT_VALUES_HIGH_PRECISION: [[i8; 21]; 46] = [
     [-100, 0, 10, 16, 21, 25, 28, 30, 33, 35, 37, 38, 40, 42, 43, 44, 46, 47, 48, 49, 50]
 ];
 
-/// Altitude adjustment table size for HIGH_PRECISION
-pub const ALTITUDE_HIGH_PRECISION_ENTRIES: usize = 111;
+/// Altitude adjustment table size for FINE_STEP
+pub const ALTITUDE_FINE_STEP_ENTRIES: usize = 111;
 
-/// Altitude pressure adjustments for HIGH_PRECISION configuration
-pub const ALTITUDE_ADJUSTMENTS_HIGH_PRECISION: [f32; 111] = [
+/// Altitude pressure adjustments for FINE_STEP configuration
+pub const ALTITUDE_ADJUSTMENTS_FINE_STEP: [f32; 111] = [
     61.5, 55.2, 49.0, 42.8, 36.6,  // -500m to -300m
     30.4, 24.3, 18.1, 12.1, 6.0,  // -250m to -50m
     -0.0, -6.0, -12.0, -17.9, -23.8,  // 0m to 200m

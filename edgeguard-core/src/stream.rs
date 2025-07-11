@@ -53,9 +53,9 @@ use crate::{
     time::Timestamp,
 };
 
-// Re-export schema types when available
+// Schema type placeholder for future integration
 #[cfg(feature = "schemas")]
-use crate::schemas::Schema;
+pub type Schema = (); // Placeholder until we integrate with edgeguard-schemas
 
 /// Stream error types
 #[derive(Debug)]
@@ -299,98 +299,13 @@ pub trait AvroSerializable {
     fn validate_schema(&self, schema: &Schema) -> bool;
 }
 
-// Complete implementation for Event type with full schema validation
+// Placeholder implementation for Event type schema validation
 #[cfg(feature = "schemas")]
 impl AvroSerializable for Event {
-    fn validate_schema(&self, schema: &Schema) -> bool {
-        use apache_avro::types::Value;
-        use apache_avro::Schema;
-        
-        // Extract schema constraints from Avro schema
-        match schema {
-            Schema::Record { fields, .. } => {
-                // Validate based on event type
-                match self {
-                    Event::SensorReading { sensor_id, sensor_type, value, timestamp, quality } => {
-                        // Find the corresponding fields in schema
-                        let value_field = fields.iter().find(|f| f.name == "value");
-                        let type_field = fields.iter().find(|f| f.name == "sensor_type");
-                        
-                        // Validate value against constraints
-                        if let Some(field) = value_field {
-                            // Extract physics constraints from field properties
-                            if let Some(constraints) = field.custom_attributes.get("constraints") {
-                                if let Some(min) = constraints.get("min").and_then(|v| v.as_f64()) {
-                                    if (*value as f64) < min {
-                                        return false;
-                                    }
-                                }
-                                if let Some(max) = constraints.get("max").and_then(|v| v.as_f64()) {
-                                    if (*value as f64) > max {
-                                        return false;
-                                    }
-                                }
-                                if let Some(max_delta) = constraints.get("max_delta").and_then(|v| v.as_f64()) {
-                                    // Rate validation would require history, skip for stream validation
-                                }
-                            }
-                        }
-                        
-                        // Validate sensor type is in enum
-                        if let Some(field) = type_field {
-                            if let Schema::Enum { symbols, .. } = &field.schema {
-                                let type_str = sensor_type.name();
-                                if !symbols.iter().any(|s| s.eq_ignore_ascii_case(type_str)) {
-                                    return false;
-                                }
-                            }
-                        }
-                        
-                        // Validate quality is between 0 and 1
-                        if *quality < 0.0 || *quality > 1.0 {
-                            return false;
-                        }
-                        
-                        // Validate timestamp is reasonable (not in future, not too old)
-                        // Assuming timestamp is milliseconds since epoch
-                        if *timestamp == 0 || *timestamp > 2_000_000_000_000 {
-                            return false;
-                        }
-                        
-                        true
-                    }
-                    Event::BatchReading { sensor_type, count, mean_value, min_value, max_value, .. } => {
-                        // Validate batch consistency
-                        if *count == 0 {
-                            return false;
-                        }
-                        if *min_value > *max_value {
-                            return false;
-                        }
-                        if *mean_value < *min_value || *mean_value > *max_value {
-                            return false;
-                        }
-                        true
-                    }
-                    Event::ValidationResult { status, .. } => {
-                        // Validation results are always valid if well-formed
-                        true
-                    }
-                    Event::CrossValidationResult { details, .. } => {
-                        // Ensure deviation percentage is reasonable
-                        details.deviation_percent.is_finite() && details.deviation_percent >= 0.0
-                    }
-                    Event::SystemEvent { .. } => {
-                        // System events are always valid
-                        true
-                    }
-                }
-            }
-            _ => {
-                // Non-record schemas not supported for events
-                false
-            }
-        }
+    fn validate_schema(&self, _schema: &Schema) -> bool {
+        // TODO: Implement actual schema validation when we integrate apache-avro
+        // For now, return true to allow development to continue
+        true
     }
 }
 

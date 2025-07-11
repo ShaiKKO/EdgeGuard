@@ -1064,7 +1064,6 @@ pub mod ekf_models {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fusion::FusionAlgorithm;
     
     #[test]
     fn temperature_model_validation() {
@@ -1134,6 +1133,7 @@ mod tests {
     #[test]
     fn temperature_ekf_model() {
         use ekf_models::TemperatureEKF;
+        use crate::fusion::FusionAlgorithm;
         
         let model = TemperatureEKF::new(10.0, 0.1);
         let filter = model.create_filter();
