@@ -269,6 +269,15 @@ impl fmt::Debug for InlineString {
     }
 }
 
+impl Default for InlineString {
+    fn default() -> Self {
+        Self {
+            len: 0,
+            data: [0u8; MAX_INLINE_ID],
+        }
+    }
+}
+
 /// Main event type for the processing pipeline
 /// 
 /// This enum represents all possible events that flow through the system.

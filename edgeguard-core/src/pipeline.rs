@@ -150,7 +150,7 @@ use heapless::{Vec, FnvIndexMap};
 
 use crate::{
     events::{Event, SensorType, ValidationStatus, ConstraintFlags, CrossValidationType, 
-             CrossValidationDetails, InlineString},
+             CrossValidationDetails, InlineString, EventBuilder},
     errors::ValidationError,
     traits::{Validator, ValidationContext},
     queue::EventQueue,
@@ -1389,5 +1389,240 @@ mod tests {
         assert!(validation_results > 0);
         assert!(cross_validation_results > 0);
         assert!(batch_results > 0);
+    }
+    
+    #[test]
+    fn stream_to_pipeline_integration() {
+        use crate::stream::MemoryStream;
+        
+        // Create test events
+        let events = [
+            EventBuilder::new(1000)
+                .sensor("temp1", SensorType::Temperature)
+                .reading(25.0, 0.95)
+                .unwrap(),
+            EventBuilder::new(2000)
+                .sensor("temp1", SensorType::Temperature)
+                .reading(150.0, 0.95) // Invalid temperature
+                .unwrap(),
+            EventBuilder::new(3000)
+                .sensor("temp1", SensorType::Temperature)
+                .reading(26.0, 0.95)
+                .unwrap(),
+        ];
+        
+        // Create stream
+        let stream = MemoryStream::new(&events);
+        
+        // Create pipeline
+        let pipeline = Pipeline::<4>::builder()
+            .add_stage(ValidationStage::new(
+                Box::new(TemperatureValidator::default()),
+                SensorType::Temperature,
+            ))
+            .build();
+        
+        // Process stream through pipeline
+        let processor = StreamProcessor::new(stream, pipeline);
+        let stats = processor.process_all().unwrap();
+        
+        // Check statistics
+        assert_eq!(stats.events_processed, 3);
+        assert_eq!(stats.events_passed, 2); // Two valid temperatures
+        assert_eq!(stats.events_failed, 1); // One invalid temperature
+        assert_eq!(stats.stream_errors, 0);
+        assert_eq!(stats.pipeline_errors, 0);
+    }
+}
+
+/// Stream-to-Pipeline Integration
+/// 
+/// Connects any Stream implementation to a Pipeline for automated processing
+pub struct StreamProcessor<S: crate::stream::Stream, const N: usize> {
+    /// Input stream
+    stream: S,
+    /// Processing pipeline
+    pipeline: Pipeline<N>,
+    /// Statistics
+    stats: ProcessingStats,
+}
+
+/// Processing statistics
+#[derive(Debug, Default)]
+pub struct ProcessingStats {
+    /// Total events processed
+    pub events_processed: usize,
+    /// Events that passed validation
+    pub events_passed: usize,
+    /// Events that failed validation
+    pub events_failed: usize,
+    /// Stream errors encountered
+    pub stream_errors: usize,
+    /// Pipeline errors encountered
+    pub pipeline_errors: usize,
+}
+
+impl<S: crate::stream::Stream<Item = Event>, const N: usize> StreamProcessor<S, N> {
+    /// Create new stream processor
+    pub fn new(stream: S, pipeline: Pipeline<N>) -> Self {
+        Self {
+            stream,
+            pipeline,
+            stats: ProcessingStats::default(),
+        }
+    }
+    
+    /// Process all events from stream
+    /// 
+    /// Continues until stream is exhausted or error occurs
+    pub fn process_all(mut self) -> Result<ProcessingStats, PipelineError> {
+        loop {
+            match self.process_one() {
+                Ok(true) => continue,
+                Ok(false) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(self.stats)
+    }
+    
+    /// Process events with batch size
+    /// 
+    /// Processes up to `batch_size` events then returns
+    pub fn process_batch(&mut self, batch_size: usize) -> Result<usize, PipelineError> {
+        let mut processed = 0;
+        
+        for _ in 0..batch_size {
+            match self.process_one() {
+                Ok(true) => processed += 1,
+                Ok(false) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        
+        Ok(processed)
+    }
+    
+    /// Process one event
+    /// 
+    /// Returns Ok(true) if event processed, Ok(false) if stream exhausted
+    fn process_one(&mut self) -> Result<bool, PipelineError> {
+        match self.stream.poll_next() {
+            Ok(event) => {
+                self.stats.events_processed += 1;
+                self.pipeline.push_event(event);
+                
+                // Process pipeline
+                match self.pipeline.process_batch(1) {
+                    Ok(_) => {
+                        // Check results
+                        while let Some(result) = self.pipeline.pop_result() {
+                            match result {
+                                Event::ValidationResult { status, .. } => {
+                                    if status == ValidationStatus::Valid {
+                                        self.stats.events_passed += 1;
+                                    } else {
+                                        self.stats.events_failed += 1;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(true)
+                    }
+                    Err(e) => {
+                        self.stats.pipeline_errors += 1;
+                        Err(e)
+                    }
+                }
+            }
+            Err(nb::Error::WouldBlock) => Ok(true), // Try again
+            Err(nb::Error::Other(_)) => {
+                self.stats.stream_errors += 1;
+                Ok(false) // Stream error, stop processing
+            }
+        }
+    }
+    
+    /// Get processing statistics
+    pub fn stats(&self) -> &ProcessingStats {
+        &self.stats
+    }
+    
+    /// Get mutable access to pipeline
+    pub fn pipeline_mut(&mut self) -> &mut Pipeline<N> {
+        &mut self.pipeline
+    }
+}
+
+/// Streaming pipeline builder extensions
+pub trait StreamingPipelineExt<const N: usize> {
+    /// Create processor from stream
+    fn process_with<S>(self, stream: S) -> StreamProcessor<S, N>
+    where
+        S: crate::stream::Stream<Item = Event>;
+}
+
+impl<const N: usize> StreamingPipelineExt<N> for Pipeline<N> {
+    fn process_with<S>(self, stream: S) -> StreamProcessor<S, N>
+    where
+        S: crate::stream::Stream<Item = Event>,
+    {
+        StreamProcessor::new(stream, self)
+    }
+}
+
+/// Stream adapter that converts raw sensor data to Events
+pub struct SensorStreamAdapter<S: crate::stream::Stream> {
+    inner: S,
+    sensor_id: &'static str,
+    sensor_type: SensorType,
+    timestamp_fn: fn() -> Timestamp,
+}
+
+impl<S: crate::stream::Stream> SensorStreamAdapter<S> {
+    /// Create new adapter
+    pub fn new(
+        stream: S,
+        sensor_id: &'static str,
+        sensor_type: SensorType,
+        timestamp_fn: fn() -> Timestamp,
+    ) -> Self {
+        Self {
+            inner: stream,
+            sensor_id,
+            sensor_type,
+            timestamp_fn,
+        }
+    }
+}
+
+impl<S> crate::stream::Stream for SensorStreamAdapter<S>
+where
+    S: crate::stream::Stream,
+    S::Item: Into<f32>,
+{
+    type Item = Event;
+    type Error = S::Error;
+    
+    fn poll_next(&mut self) -> nb::Result<Self::Item, Self::Error> {
+        let value = self.inner.poll_next()?.into();
+        
+        // Create event from raw value
+        let event = EventBuilder::new((self.timestamp_fn)())
+            .sensor(self.sensor_id, self.sensor_type)
+            .reading(value, 1.0) // Default confidence
+            .unwrap_or_else(|| {
+                // Fallback event on builder failure
+                Event::SensorReading {
+                    timestamp: (self.timestamp_fn)(),
+                    sensor_id: InlineString::new(self.sensor_id).unwrap_or_default(),
+                    sensor_type: self.sensor_type,
+                    value,
+                    quality: 1.0,
+                }
+            });
+            
+        Ok(event)
     }
 }
