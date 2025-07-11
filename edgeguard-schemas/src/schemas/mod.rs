@@ -1,7 +1,82 @@
-//! EdgeGuard Avro schemas with physics constraints
+//! EdgeGuard Avro Schema Definitions
 //!
-//! Each schema includes metadata for physics-based validation.
-//! Schemas follow semantic versioning for compatibility.
+//! ## Schema Design Principles
+//!
+//! Each schema is designed with IoT constraints in mind:
+//!
+//! 1. **Minimal Size**: Every byte counts on constrained networks
+//! 2. **Optional Fields**: Sensors may not always have all data
+//! 3. **Forward Compatibility**: New fields can be added without breaking
+//! 4. **Physics Awareness**: Constraints embedded for validation
+//!
+//! ## Schema Versioning Strategy
+//!
+//! We follow semantic versioning for schemas:
+//! - **Major**: Breaking changes (field removal, type change)
+//! - **Minor**: New optional fields added
+//! - **Patch**: Documentation or metadata changes
+//!
+//! Example: `sensor_reading_v1` → `sensor_reading_v2` (major change)
+//!
+//! ## Schema Categories
+//!
+//! ### 1. Data Schemas
+//! - `SensorReading`: Individual sensor measurements
+//! - `SensorBatch`: Compressed batches for high-frequency data
+//!
+//! ### 2. Operational Schemas  
+//! - `DeviceStatus`: Health and resource metrics
+//! - `Alert`: Validation failures and anomalies
+//!
+//! ### 3. Configuration Schemas (Future)
+//! - `SensorConfig`: Runtime sensor configuration
+//! - `ValidationRules`: Dynamic validation updates
+//!
+//! ## Optimization Techniques
+//!
+//! ### Field Ordering
+//! Fields are ordered by likelihood of presence:
+//! 1. Required fields first (always present)
+//! 2. Common optional fields next
+//! 3. Rare fields last
+//!
+//! This minimizes encoded size when optional fields are null.
+//!
+//! ### Type Selection
+//! - Use `float` over `double` when precision allows (4 vs 8 bytes)
+//! - Use `int` over `long` for constrained values
+//! - Use enums over strings for known values
+//!
+//! ### Batching Strategy
+//! For high-frequency sensors (>10Hz), use `SensorBatch`:
+//! - Base timestamp + deltas saves ~75% on timestamps
+//! - Compression ratios of 10:1 typical for temperature
+//! - Statistics enable validation without decompression
+//!
+//! ## Cross-Language Compatibility
+//!
+//! These schemas work with:
+//! - **C**: Use avro-c with code generation
+//! - **Python**: Use fastavro for performance
+//! - **Java**: Native Avro support
+//! - **JavaScript**: Use avro-js for browsers
+//!
+//! ## Usage Examples
+//!
+//! ```rust
+//! use edgeguard_schemas::schemas::{sensor_reading_v1, alert_v1};
+//! use apache_avro::Writer;
+//!
+//! // Get schema for encoding
+//! let schema = sensor_reading_v1()?;
+//! 
+//! // Create writer with compression
+//! let writer = Writer::builder()
+//!     .schema(&schema)
+//!     .codec(apache_avro::Codec::Snappy)
+//!     .build()?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use apache_avro::Schema;
 use serde_json::json;
