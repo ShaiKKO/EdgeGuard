@@ -130,6 +130,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod schemas;
+pub mod physics;
+pub mod registry;
+pub mod validation;
 
 /// Schema registry for managing multiple schema versions
 pub struct SchemaRegistry {

@@ -131,6 +131,7 @@ extern crate alloc;
 pub mod buffer;
 pub mod errors;
 pub mod events;
+pub mod fusion;
 pub mod lookup;
 pub mod pipeline;
 pub mod queue;

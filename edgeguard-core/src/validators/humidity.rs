@@ -184,7 +184,25 @@ impl HumidityValidator {
                     return None;
                 }
                 
-                let alpha = (A * temp_c) / (B + temp_c) + libm::logf(rh_percent / 100.0);
+                // Natural logarithm approximation using Taylor series
+                // ln(x) ≈ (x-1) - (x-1)²/2 + (x-1)³/3 - (x-1)⁴/4
+                let x = rh_percent / 100.0;
+                let ln_x = if (x - 1.0).abs() < 0.5 {
+                    // Taylor series for x close to 1
+                    let t = x - 1.0;
+                    t - t * t * 0.5 + t * t * t / 3.0 - t * t * t * t * 0.25
+                } else {
+                    // For values farther from 1, use Newton's method
+                    let mut ln_val = x - 1.0; // Initial guess
+                    for _ in 0..3 {
+                        // exp approximation for Newton iteration
+                        let exp_ln = 1.0 + ln_val + ln_val * ln_val * 0.5;
+                        ln_val = ln_val - (exp_ln - x) / exp_ln;
+                    }
+                    ln_val
+                };
+                
+                let alpha = (A * temp_c) / (B + temp_c) + ln_x;
                 let dew_point = (B * alpha) / (A - alpha);
                 
                 if dew_point.is_finite() {

@@ -289,10 +289,10 @@ mod tables {
     use super::*;
     include!("../high_precision_tables.rs");
     
-    pub const DEW_POINT_TABLE_ROWS: usize = DEW_POINT_FINE_STEP_ROWS;
-    pub const DEW_POINT_TABLE_COLS: usize = DEW_POINT_FINE_STEP_COLS;
-    pub const DEW_POINT_VALUES: [[i8; DEW_POINT_TABLE_COLS]; DEW_POINT_TABLE_ROWS] = DEW_POINT_VALUES_FINE_STEP;
-    pub const ALTITUDE_VALUES: &[f32] = &ALTITUDE_ADJUSTMENTS_FINE_STEP;
+    pub const DEW_POINT_TABLE_ROWS: usize = DEW_POINT_HIGH_PRECISION_ROWS;
+    pub const DEW_POINT_TABLE_COLS: usize = DEW_POINT_HIGH_PRECISION_COLS;
+    pub const DEW_POINT_VALUES: [[i8; DEW_POINT_TABLE_COLS]; DEW_POINT_TABLE_ROWS] = DEW_POINT_VALUES_HIGH_PRECISION;
+    pub const ALTITUDE_VALUES: &[f32] = &ALTITUDE_ADJUSTMENTS_HIGH_PRECISION;
 }
 
 // Default to standard tables
