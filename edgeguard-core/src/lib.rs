@@ -130,7 +130,11 @@ extern crate alloc;
 
 pub mod buffer;
 pub mod errors;
+pub mod events;
 pub mod lookup;
+pub mod pipeline;
+pub mod queue;
+pub mod stream;
 pub mod time;
 pub mod traits;
 pub mod validators;

@@ -18,6 +18,7 @@ fixed = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
 defmt = { workspace = true, optional = true }
 thiserror-no-std = { workspace = true }
+nb = { workspace = true }
 
 [features]
 default = ["std"]
@@ -26,6 +27,7 @@ embedded = ["defmt", "fixed"]
 alloc = ["serde/alloc"]
 low_memory_tables = []
 high_precision_tables = []
+schemas = []
 
 [dev-dependencies]
 proptest = { workspace = true }
