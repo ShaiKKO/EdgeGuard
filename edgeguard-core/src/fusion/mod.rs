@@ -635,7 +635,7 @@ mod tests {
         
         // Estimate should be weighted average
         assert!((estimate - 25.0).abs() < 0.1);
-        assert!(confidence.value() > 0.5);
+        assert!(confidence.value() > 32768); // > 50% confidence
         
         // Test with sensor mask (only first two)
         let (estimate2, confidence2) = fusion.fuse(&measurements, Some(0b011));

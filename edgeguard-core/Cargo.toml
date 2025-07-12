@@ -36,3 +36,43 @@ criterion = { workspace = true }
 # [[bench]]
 # name = "validation"
 # harness = false
+
+[[example]]
+name = "01_basic_validation"
+path = "examples/01_basic_validation.rs"
+
+[[example]]
+name = "02_multi_sensor"
+path = "examples/02_multi_sensor.rs"
+
+[[example]]
+name = "03_lookup_tables"
+path = "examples/03_lookup_tables.rs"
+
+[[example]]
+name = "04_event_pipeline"
+path = "examples/04_event_pipeline.rs"
+
+[[example]]
+name = "05_custom_stages"
+path = "examples/05_custom_stages.rs"
+
+[[example]]
+name = "06_error_handling"
+path = "examples/06_error_handling.rs"
+
+[[example]]
+name = "07_kalman_fusion"
+path = "examples/07_kalman_fusion.rs"
+
+[[example]]
+name = "08_ekf_models"
+path = "examples/08_ekf_models.rs"
+
+[[example]]
+name = "09_multi_fusion"
+path = "examples/09_multi_fusion.rs"
+
+[[example]]
+name = "10_streaming_data"
+path = "examples/10_streaming_data.rs"

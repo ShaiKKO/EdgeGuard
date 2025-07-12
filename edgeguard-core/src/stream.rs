@@ -869,12 +869,14 @@ impl<S: Stream, T: crate::time::TimeSource> Stream for RateLimitedStream<S, T> {
         }
         
         // Try to get item
-        let item = self.inner.poll_next()?;
-        
-        // Consume token
-        self.tokens -= 1.0;
-        
-        Ok(item)
+        match self.inner.poll_next() {
+            Ok(item) => {
+                // Consume token
+                self.tokens -= 1.0;
+                Ok(item)
+            }
+            err => err, // Propagate WouldBlock and Other errors (including EndOfStream)
+        }
     }
 }
 
@@ -918,6 +920,8 @@ pub struct BatchingStream<S: Stream, T: crate::time::TimeSource, const N: usize>
     batch_start: Timestamp,
     /// Time source for timeout tracking
     time_source: T,
+    /// Pending item that couldn't fit in the previous batch
+    pending: Option<S::Item>,
 }
 
 impl<S: Stream, T: crate::time::TimeSource, const N: usize> BatchingStream<S, T, N> {
@@ -928,6 +932,7 @@ impl<S: Stream, T: crate::time::TimeSource, const N: usize> BatchingStream<S, T,
             timeout_ms,
             batch_start: 0,
             time_source,
+            pending: None,
         }
     }
 }
@@ -940,6 +945,14 @@ where
     type Error = StreamError<S::Error>;
     
     fn poll_next(&mut self) -> nb::Result<Self::Item, Self::Error> {
+        // First, handle any pending item from the previous batch
+        if let Some(item) = self.pending.take() {
+            if self.buffer.is_empty() {
+                self.batch_start = self.time_source.now();
+            }
+            let _ = self.buffer.push(item); // This should always succeed since buffer was just emptied
+        }
+        
         // Try to fill buffer
         loop {
             match self.inner.poll_next() {
@@ -948,11 +961,13 @@ where
                         self.batch_start = self.time_source.now();
                     }
                     
-                    if self.buffer.push(item).is_err() {
-                        // Buffer full, return batch
+                    if self.buffer.push(item.clone()).is_err() {
+                        // Buffer full, save this item for next batch
+                        self.pending = Some(item);
                         let batch = core::mem::take(&mut self.buffer);
                         return Ok(batch);
                     }
+                    // Continue looping to try to fill more
                 }
                 Err(nb::Error::WouldBlock) => {
                     // Check timeout
@@ -968,6 +983,12 @@ where
                     return Err(nb::Error::WouldBlock);
                 }
                 Err(nb::Error::Other(e)) => {
+                    // If we have buffered items and the stream ended, return them first
+                    if !self.buffer.is_empty() {
+                        // Save the error for later
+                        let batch = core::mem::take(&mut self.buffer);
+                        return Ok(batch);
+                    }
                     return Err(nb::Error::Other(StreamError::Transport(e)));
                 }
             }
@@ -1313,7 +1334,7 @@ mod tests {
     
     #[test]
     fn batching_stream() {
-        use crate::time::{TimeSource, MonotonicClock};
+        use crate::time::{TimeSource, MonotonicClock, MockTimeSource};
         
         let events = [
             EventBuilder::new(1000).sensor("t1", SensorType::Temperature).reading(25.0, 0.95).unwrap(),
@@ -1322,8 +1343,8 @@ mod tests {
         ];
         
         let memory = MemoryStream::new(&events);
-        let clock = MonotonicClock::new();
-        let mut batching = BatchingStream::<_, _, 2>::new(memory, 1000, clock);
+        let clock = MockTimeSource::new(0);
+        let mut batching = BatchingStream::<_, _, 2>::new(memory, 10, clock); // Short timeout for test
         
         // Should get batch of 2
         match batching.poll_next() {
@@ -1331,11 +1352,18 @@ mod tests {
             _ => panic!("Expected batch"),
         }
         
-        // Should get batch of 1
+        // Should get batch of 1 (the remaining event)
+        // The batching stream returns buffered items when the inner stream ends
         match batching.poll_next() {
             Ok(batch) => assert_eq!(batch.len(), 1),
-            _ => panic!("Expected batch"),
+            Err(e) => panic!("Expected final batch, got error: {:?}", e),
         }
+        
+        // Now the stream should be exhausted
+        assert!(matches!(
+            batching.poll_next(), 
+            Err(nb::Error::Other(StreamError::Transport(_)))
+        ));
     }
     
     #[test]
@@ -1357,5 +1385,180 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 2);
+    }
+    
+    #[test]
+    fn backpressure_control() {
+        let mut bp = BackpressureControl::new(100, 50);
+        
+        // Initially should not pause
+        assert!(!bp.should_pause());
+        assert_eq!(bp.utilization(), 0);
+        
+        // Produce items up to high watermark
+        bp.produced(100);
+        assert!(bp.should_pause());
+        assert_eq!(bp.utilization(), 100);
+        
+        // Consume some but not below low watermark
+        bp.consumed(30);
+        assert!(bp.should_pause()); // Still paused due to hysteresis
+        
+        // Consume below low watermark
+        bp.consumed(30);
+        assert!(!bp.should_pause()); // Resume
+        assert_eq!(bp.utilization(), 40);
+    }
+    
+    #[test]
+    fn backpressure_wrapper() {
+        let events = [
+            EventBuilder::new(1000).sensor("t1", SensorType::Temperature).reading(25.0, 0.95).unwrap(),
+            EventBuilder::new(2000).sensor("t1", SensorType::Temperature).reading(25.5, 0.95).unwrap(),
+        ];
+        
+        let stream = MemoryStream::new(&events);
+        let mut bp_stream = BackpressureWrapper::new(
+            stream,
+            BackpressureControl::new(1, 0), // Pause after 1 item
+        );
+        
+        // First item should succeed
+        assert!(bp_stream.poll_next().is_ok());
+        
+        // Second should block due to backpressure
+        assert!(matches!(bp_stream.poll_next(), Err(nb::Error::WouldBlock)));
+        
+        // Consume one item
+        bp_stream.backpressure_mut().consumed(1);
+        
+        // Now should get second item
+        assert!(bp_stream.poll_next().is_ok());
+    }
+    
+    #[test]
+    fn rate_limited_stream() {
+        use crate::time::{TimeSource, MockTimeSource};
+        
+        let events = [
+            EventBuilder::new(1000).sensor("t1", SensorType::Temperature).reading(25.0, 0.95).unwrap(),
+            EventBuilder::new(2000).sensor("t1", SensorType::Temperature).reading(25.5, 0.95).unwrap(),
+            EventBuilder::new(3000).sensor("t1", SensorType::Temperature).reading(26.0, 0.95).unwrap(),
+        ];
+        
+        let stream = MemoryStream::new(&events);
+        let time_source = MockTimeSource::new(0);
+        let mut limited = RateLimitedStream::new(stream, 2, time_source); // 2 events/sec
+        
+        // First two events should succeed (initial tokens)
+        assert!(limited.poll_next().is_ok());
+        assert!(limited.poll_next().is_ok());
+        
+        // Third should block (no tokens)
+        assert!(matches!(limited.poll_next(), Err(nb::Error::WouldBlock)));
+        
+        // Advance time by 500ms
+        limited.time_source.set(500);
+        
+        // Should get one more token (0.5 sec * 2 events/sec = 1 token)
+        assert!(limited.poll_next().is_ok());
+        
+        // Now exhausted but no tokens, so WouldBlock
+        assert!(matches!(limited.poll_next(), Err(nb::Error::WouldBlock)));
+        
+        // Advance time to get more tokens
+        limited.time_source.set(1000); // Another 500ms
+        
+        // Now with tokens, should see EndOfStream
+        assert!(matches!(limited.poll_next(), Err(nb::Error::Other(StreamError::EndOfStream))));
+    }
+    
+    #[test]
+    fn recovery_wrapper_retry() {
+        // Create a flaky stream that fails then succeeds
+        struct FlakyStream {
+            attempts: u8,
+        }
+        
+        impl crate::stream::Stream for FlakyStream {
+            type Item = Event;
+            type Error = &'static str;
+            
+            fn poll_next(&mut self) -> nb::Result<Self::Item, Self::Error> {
+                self.attempts += 1;
+                if self.attempts < 3 {
+                    Err(nb::Error::Other("Temporary error"))
+                } else {
+                    Ok(EventBuilder::new(1000)
+                        .sensor("t1", SensorType::Temperature)
+                        .reading(25.0, 0.95)
+                        .unwrap())
+                }
+            }
+        }
+        
+        let stream = FlakyStream { attempts: 0 };
+        let mut recovery = RecoveryWrapper::new(stream)
+            .with_strategy("default", RecoveryStrategy::RetryImmediate);
+        
+        // First attempts should return WouldBlock (retry signal)
+        assert!(matches!(recovery.poll_next(), Err(nb::Error::WouldBlock)));
+        assert!(matches!(recovery.poll_next(), Err(nb::Error::WouldBlock)));
+        
+        // Third attempt should succeed
+        assert!(recovery.poll_next().is_ok());
+    }
+    
+    #[test]
+    fn file_stream_csv_parsing() {
+        // Test CSV parsing without actual file I/O
+        let stream = FileStream::new("test.csv", FileFormat::Csv).unwrap();
+        
+        // Test parsing a valid CSV line
+        let line = "1000,temp1,temperature,25.5,0.95";
+        let event = stream.parse_csv_line(line).unwrap();
+        
+        match event {
+            Event::SensorReading { timestamp, sensor_id, sensor_type, value, quality } => {
+                assert_eq!(timestamp, 1000);
+                assert_eq!(sensor_id.as_str(), "temp1");
+                assert_eq!(sensor_type, SensorType::Temperature);
+                assert_eq!(value, 25.5);
+                assert_eq!(quality, 0.95);
+            }
+            _ => panic!("Expected SensorReading event"),
+        }
+    }
+    
+    #[test]
+    fn batch_processor_with_time() {
+        use crate::time::{TimeSource, MockTimeSource};
+        
+        let events = [
+            EventBuilder::new(1000).sensor("t1", SensorType::Temperature).reading(25.0, 0.95).unwrap(),
+            EventBuilder::new(2000).sensor("t1", SensorType::Temperature).reading(25.5, 0.95).unwrap(),
+            EventBuilder::new(3000).sensor("t1", SensorType::Temperature).reading(26.0, 0.95).unwrap(),
+        ];
+        
+        let mut stream = MemoryStream::new(&events);
+        let time_source = MockTimeSource::new(0);
+        
+        let mut batch_count = 0;
+        let mut total_items = 0;
+        
+        // Process with small batch size and timeout
+        let processed = stream.process_batch_timed::<_, 10>(
+            2,      // max batch size
+            100,    // 100ms timeout
+            &time_source,
+            |batch| {
+                batch_count += 1;
+                total_items += batch.len();
+            }
+        ).unwrap();
+        
+        assert_eq!(processed, 2); // Should process 2 items (batch size limit)
+        assert_eq!(batch_count, 1);
+        assert_eq!(total_items, 2);
     }
 }

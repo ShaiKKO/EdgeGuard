@@ -1394,6 +1394,7 @@ mod tests {
     #[test]
     fn stream_to_pipeline_integration() {
         use crate::stream::MemoryStream;
+        use crate::validators::TemperatureValidator;
         
         // Create test events
         let events = [
@@ -1417,7 +1418,7 @@ mod tests {
         // Create pipeline
         let pipeline = Pipeline::<4>::builder()
             .add_stage(ValidationStage::new(
-                Box::new(TemperatureValidator::default()),
+                TemperatureValidator::default(),
                 SensorType::Temperature,
             ))
             .build();

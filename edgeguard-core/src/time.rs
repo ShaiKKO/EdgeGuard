@@ -151,19 +151,34 @@ pub trait TimeSource {
 #[derive(Debug, Clone)]
 pub struct MonotonicTime {
     start_ms: Timestamp,
+    #[cfg(feature = "std")]
+    start_instant: std::time::Instant,
 }
 
 impl MonotonicTime {
     pub fn new() -> Self {
-        Self { start_ms: 0 }
+        Self { 
+            start_ms: 0,
+            #[cfg(feature = "std")]
+            start_instant: std::time::Instant::now(),
+        }
     }
 }
 
 impl TimeSource for MonotonicTime {
     fn now(&self) -> Timestamp {
-        // In real implementation, read from hardware timer
-        // For now, simulate with a counter
-        self.start_ms
+        #[cfg(feature = "std")]
+        {
+            // Use std::time::Instant for actual monotonic time
+            self.start_instant.elapsed().as_millis() as Timestamp
+        }
+        
+        #[cfg(not(feature = "std"))]
+        {
+            // In no_std, this would read from hardware timer
+            // For now, return fixed value
+            self.start_ms
+        }
     }
     
     fn is_wall_clock(&self) -> bool {
@@ -227,6 +242,41 @@ impl TimeSource for FixedTime {
     
     fn is_wall_clock(&self) -> bool {
         false
+    }
+    
+    fn precision_ms(&self) -> u32 {
+        1
+    }
+}
+
+/// Mock time source for testing - alias for FixedTime
+pub type MockTimeSource = FixedTime;
+
+/// Monotonic clock - alias for MonotonicTime for backward compatibility
+pub type MonotonicClock = MonotonicTime;
+
+/// Time source that reads from a ValidationContext
+/// 
+/// This allows using the validation context's timestamp as a time source,
+/// useful for consistent time handling in validation pipelines.
+pub struct ContextTimeSource<'a> {
+    context: &'a crate::traits::ValidationContext,
+}
+
+impl<'a> ContextTimeSource<'a> {
+    /// Create a new time source from a validation context
+    pub fn new(context: &'a crate::traits::ValidationContext) -> Self {
+        Self { context }
+    }
+}
+
+impl<'a> TimeSource for ContextTimeSource<'a> {
+    fn now(&self) -> Timestamp {
+        self.context.timestamp
+    }
+    
+    fn is_wall_clock(&self) -> bool {
+        true // Assumes context timestamp is wall clock time
     }
     
     fn precision_ms(&self) -> u32 {

@@ -1116,7 +1116,7 @@ mod tests {
     fn state_transition_models() {
         // Test constant velocity model
         let dt = 0.1; // 100ms
-        let cv_model = StateTransition::constant_velocity(dt, 0.1);
+        let cv_model = StateTransition::<2>::constant_velocity(dt, 0.1);
         
         // Check transition matrix
         assert_eq!(cv_model.transition_matrix[0][0], 1.0);
