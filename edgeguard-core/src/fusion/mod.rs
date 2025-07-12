@@ -245,6 +245,8 @@ pub struct WeightedAverageFusion<const M: usize> {
     weights: [f32; M],
     /// Last estimate
     last_estimate: f32,
+    /// State as array (for trait compatibility)
+    state_array: [f32; 1],
     /// Measurement count for convergence
     measurement_count: u32,
 }
@@ -256,6 +258,7 @@ impl<const M: usize> WeightedAverageFusion<M> {
             sensors: heapless::Vec::new(),
             weights: [0.0; M],
             last_estimate: 0.0,
+            state_array: [0.0; 1],
             measurement_count: 0,
         }
     }
@@ -329,6 +332,336 @@ impl<const M: usize> WeightedAverageFusion<M> {
         let overall_confidence = sensor_confidence * convergence_confidence * agreement_confidence;
         
         (estimate, ConfidenceScore::from_float(overall_confidence))
+    }
+}
+
+/// Configuration for weighted average fusion
+#[derive(Debug, Clone)]
+pub struct WeightedAverageConfig<const M: usize> {
+    /// Weights for each sensor (normalized internally)
+    pub weights: [f32; M],
+    /// Minimum sensors required for fusion
+    pub min_sensors: usize,
+    /// Outlier rejection threshold (in standard deviations)
+    pub outlier_threshold: f32,
+}
+
+impl<const M: usize> Default for WeightedAverageConfig<M> {
+    fn default() -> Self {
+        let mut weights = [1.0; M];
+        // Normalize to sum to 1
+        for w in weights.iter_mut() {
+            *w /= M as f32;
+        }
+        Self {
+            weights,
+            min_sensors: (M + 1) / 2, // Majority
+            outlier_threshold: 3.0,
+        }
+    }
+}
+
+impl<const M: usize> FusionAlgorithm<1, M> for WeightedAverageFusion<M> {
+    type Config = WeightedAverageConfig<M>;
+    
+    fn new(config: Self::Config) -> Self {
+        let mut fusion = Self {
+            sensors: heapless::Vec::new(),
+            weights: config.weights,
+            last_estimate: 0.0,
+            state_array: [0.0; 1],
+            measurement_count: 0,
+        };
+        
+        // Normalize weights
+        let sum: f32 = fusion.weights.iter().sum();
+        if sum > 0.0 {
+            for w in fusion.weights.iter_mut() {
+                *w /= sum;
+            }
+        }
+        
+        fusion
+    }
+    
+    fn predict(&mut self, _dt_ms: u32) -> FusionResult<()> {
+        // Weighted average doesn't use prediction
+        Ok(())
+    }
+    
+    fn update(
+        &mut self,
+        measurements: &[f32; M],
+        _timestamp: Timestamp,
+        mask: Option<u32>,
+    ) -> FusionResult<(f32, ConfidenceScore)> {
+        let result = self.fuse(measurements, mask);
+        self.state_array[0] = result.0;
+        Ok(result)
+    }
+    
+    fn state(&self) -> &[f32; 1] {
+        // Return as single-element array for trait compatibility
+        // We can't store this as an array, so we need a workaround
+        // This is a limitation of the trait design
+        panic!("WeightedAverageFusion::state() not supported - use last_estimate field directly")
+    }
+    
+    fn uncertainty(&self) -> [f32; 1] {
+        // Uncertainty based on sensor count and agreement
+        // This is a simplified estimate
+        [1.0 / (self.measurement_count as f32 + 1.0)]
+    }
+    
+    fn reset(&mut self) {
+        self.last_estimate = 0.0;
+        self.measurement_count = 0;
+    }
+    
+    fn has_converged(&self) -> bool {
+        self.measurement_count >= 10
+    }
+}
+
+/// Complementary filter for combining fast and slow sensors
+/// 
+/// Ideal for combining sensors with different frequency responses,
+/// such as accelerometer (fast) and gyroscope (slow) data.
+pub struct ComplementaryFilter {
+    /// Weight for fast sensor (0.0 to 1.0)
+    fast_weight: f32,
+    /// Current state estimate
+    state: f32,
+    /// State as array (for trait compatibility)
+    state_array: [f32; 1],
+    /// Last timestamp for dt calculation
+    last_timestamp: Timestamp,
+}
+
+/// Configuration for complementary filter
+#[derive(Debug, Clone)]
+pub struct ComplementaryConfig {
+    /// Weight for fast sensor (0.0 to 1.0)
+    pub fast_weight: f32,
+    /// Weight for slow sensor (1.0 - fast_weight)
+    pub slow_weight: f32,
+    /// Crossover frequency in Hz
+    pub crossover_freq: f32,
+}
+
+impl Default for ComplementaryConfig {
+    fn default() -> Self {
+        Self {
+            fast_weight: 0.02,
+            slow_weight: 0.98,
+            crossover_freq: 0.1,
+        }
+    }
+}
+
+impl ComplementaryFilter {
+    /// Create new complementary filter
+    pub fn new(config: ComplementaryConfig) -> Self {
+        Self {
+            fast_weight: config.fast_weight,
+            state: 0.0,
+            state_array: [0.0; 1],
+            last_timestamp: 0,
+        }
+    }
+}
+
+impl FusionAlgorithm<1, 2> for ComplementaryFilter {
+    type Config = ComplementaryConfig;
+    
+    fn new(config: Self::Config) -> Self {
+        ComplementaryFilter::new(config)
+    }
+    
+    fn predict(&mut self, _dt_ms: u32) -> FusionResult<()> {
+        // Complementary filter doesn't use explicit prediction
+        Ok(())
+    }
+    
+    fn update(
+        &mut self,
+        measurements: &[f32; 2],
+        timestamp: Timestamp,
+        _mask: Option<u32>,
+    ) -> FusionResult<(f32, ConfidenceScore)> {
+        let fast_sensor = measurements[0];
+        let slow_sensor = measurements[1];
+        
+        // Classic complementary filter equation
+        self.state = self.fast_weight * fast_sensor + (1.0 - self.fast_weight) * slow_sensor;
+        self.state_array[0] = self.state;
+        
+        self.last_timestamp = timestamp;
+        
+        // Confidence based on sensor agreement
+        let difference = (fast_sensor - slow_sensor).abs();
+        let confidence = if difference < 0.1 {
+            1.0
+        } else if difference < 1.0 {
+            1.0 - (difference - 0.1) / 0.9
+        } else {
+            0.5
+        };
+        
+        Ok((self.state, ConfidenceScore::from_float(confidence)))
+    }
+    
+    fn state(&self) -> &[f32; 1] {
+        &self.state_array
+    }
+    
+    fn uncertainty(&self) -> [f32; 1] {
+        // Simple uncertainty estimate
+        [0.1]
+    }
+    
+    fn reset(&mut self) {
+        self.state = 0.0;
+        self.state_array[0] = 0.0;
+        self.last_timestamp = 0;
+    }
+    
+    fn has_converged(&self) -> bool {
+        true // Complementary filter converges immediately
+    }
+}
+
+/// Consensus voting fusion for safety-critical applications
+/// 
+/// Rejects outliers and requires minimum agreement between sensors
+pub struct ConsensusVoting<const M: usize> {
+    /// Outlier threshold in standard deviations
+    outlier_threshold: f32,
+    /// Minimum votes required
+    min_votes: usize,
+    /// Last valid estimate
+    last_estimate: f32,
+    /// State as array (for trait compatibility)
+    state_array: [f32; 1],
+    /// Measurement count
+    measurement_count: u32,
+}
+
+/// Configuration for consensus voting
+#[derive(Debug, Clone)]
+pub struct VotingConfig {
+    /// Outlier threshold in standard deviations
+    pub outlier_threshold: f32,
+    /// Minimum votes required for valid estimate
+    pub min_votes: usize,
+    /// Confidence threshold for accepting result
+    pub confidence_threshold: f32,
+}
+
+impl Default for VotingConfig {
+    fn default() -> Self {
+        Self {
+            outlier_threshold: 2.0,
+            min_votes: 2,
+            confidence_threshold: 0.7,
+        }
+    }
+}
+
+impl<const M: usize> ConsensusVoting<M> {
+    /// Create new consensus voting fusion
+    pub fn new(config: VotingConfig) -> Self {
+        Self {
+            outlier_threshold: config.outlier_threshold,
+            min_votes: config.min_votes,
+            last_estimate: 0.0,
+            state_array: [0.0; 1],
+            measurement_count: 0,
+        }
+    }
+}
+
+impl<const M: usize> FusionAlgorithm<1, M> for ConsensusVoting<M> {
+    type Config = VotingConfig;
+    
+    fn new(config: Self::Config) -> Self {
+        ConsensusVoting::new(config)
+    }
+    
+    fn predict(&mut self, _dt_ms: u32) -> FusionResult<()> {
+        Ok(())
+    }
+    
+    fn update(
+        &mut self,
+        measurements: &[f32; M],
+        _timestamp: Timestamp,
+        mask: Option<u32>,
+    ) -> FusionResult<(f32, ConfidenceScore)> {
+        let mask = mask.unwrap_or(u32::MAX);
+        
+        // Collect active measurements
+        let mut active_measurements = heapless::Vec::<f32, M>::new();
+        for i in 0..M {
+            if mask & (1 << i) != 0 {
+                let _ = active_measurements.push(measurements[i]);
+            }
+        }
+        
+        if active_measurements.is_empty() {
+            return Ok((self.last_estimate, ConfidenceScore::from_float(0.0)));
+        }
+        
+        // Calculate mean and standard deviation
+        let mean = active_measurements.iter().sum::<f32>() / active_measurements.len() as f32;
+        let variance = active_measurements.iter()
+            .map(|x| (x - mean).powi(2))
+            .sum::<f32>() / active_measurements.len() as f32;
+        let std_dev = variance.sqrt();
+        
+        // Filter outliers
+        let mut valid_measurements = heapless::Vec::<f32, M>::new();
+        for &measurement in active_measurements.iter() {
+            if (measurement - mean).abs() <= self.outlier_threshold * std_dev {
+                let _ = valid_measurements.push(measurement);
+            }
+        }
+        
+        // Check if we have enough valid measurements
+        if valid_measurements.len() < self.min_votes {
+            return Ok((self.last_estimate, ConfidenceScore::from_float(0.0)));
+        }
+        
+        // Calculate consensus estimate
+        let consensus = valid_measurements.iter().sum::<f32>() / valid_measurements.len() as f32;
+        self.last_estimate = consensus;
+        self.state_array[0] = consensus;
+        self.measurement_count += 1;
+        
+        // Calculate confidence
+        let vote_ratio = valid_measurements.len() as f32 / active_measurements.len() as f32;
+        let convergence = (self.measurement_count as f32 / 10.0).min(1.0);
+        let confidence = vote_ratio * convergence;
+        
+        Ok((consensus, ConfidenceScore::from_float(confidence)))
+    }
+    
+    fn state(&self) -> &[f32; 1] {
+        &self.state_array
+    }
+    
+    fn uncertainty(&self) -> [f32; 1] {
+        [0.1 / (self.measurement_count as f32 + 1.0)]
+    }
+    
+    fn reset(&mut self) {
+        self.last_estimate = 0.0;
+        self.state_array[0] = 0.0;
+        self.measurement_count = 0;
+    }
+    
+    fn has_converged(&self) -> bool {
+        self.measurement_count >= 5
     }
 }
 

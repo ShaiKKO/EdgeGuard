@@ -508,6 +508,41 @@ impl<const N: usize, const M: usize> ExtendedKalmanFilter<N, M> {
         }
     }
     
+    /// Predict next state
+    pub fn predict(&mut self, dt_ms: u32) -> FusionResult<()> {
+        self.kf.predict(dt_ms)
+    }
+    
+    /// Update with measurements
+    pub fn update(
+        &mut self,
+        measurements: &[f32; M],
+        timestamp: Timestamp,
+        mask: Option<u32>,
+    ) -> FusionResult<(f32, ConfidenceScore)> {
+        self.kf.update(measurements, timestamp, mask)
+    }
+    
+    /// Get current state estimate
+    pub fn state(&self) -> &[f32; N] {
+        self.kf.state()
+    }
+    
+    /// Get uncertainty (diagonal of covariance)
+    pub fn uncertainty(&self) -> [f32; N] {
+        self.kf.uncertainty()
+    }
+    
+    /// Reset to initial conditions
+    pub fn reset(&mut self) {
+        self.kf.reset()
+    }
+    
+    /// Check if filter has converged
+    pub fn has_converged(&self) -> bool {
+        self.kf.has_converged()
+    }
+    
     /// Compute Jacobian matrix using finite differences
     fn compute_jacobian_state(&self, state: &Vector<N>) -> SquareMatrix<N> {
         let mut jacobian = [[0.0; N]; N];
