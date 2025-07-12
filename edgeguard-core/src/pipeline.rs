@@ -146,6 +146,15 @@
 //!     .build();
 //! ```
 
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(not(feature = "std"))]
+use alloc::boxed::Box;
+
+#[cfg(feature = "std")]
+use std::boxed::Box;
+
 use heapless::{Vec, FnvIndexMap};
 
 use crate::{
@@ -868,7 +877,10 @@ impl AggregationStage {
                 // to avoid libm dependency
                 let mean = self.value_buffer.iter().sum::<f32>() / self.value_buffer.len() as f32;
                 let variance = self.value_buffer.iter()
-                    .map(|v| (v - mean).powi(2))
+                    .map(|v| {
+                        let diff = v - mean;
+                        diff * diff  // Square without powi
+                    })
                     .sum::<f32>() / self.value_buffer.len() as f32;
                 
                 // Integer square root approximation (Newton's method)
@@ -1164,6 +1176,10 @@ mod tests {
     use super::*;
     use crate::events::EventBuilder;
     use crate::validators::{TemperatureValidator, HumidityValidator, PressureValidator};
+    #[cfg(not(feature = "std"))]
+    use alloc::vec;
+    #[cfg(feature = "std")]
+    use std::vec;
     
     #[test]
     fn pipeline_validation() {

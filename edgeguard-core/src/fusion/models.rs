@@ -64,6 +64,15 @@
 //!     .with_sensor_model(model);
 //! ```
 
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
+
+#[cfg(feature = "std")]
+use std::string::String;
+
 use crate::{
     errors::ValidationError,
     events::SensorType,
@@ -160,7 +169,7 @@ impl TemperatureModel {
     /// Create with default parameters
     pub fn new(sensor_id: &str) -> Self {
         Self {
-            sensor_id: sensor_id.to_string(),
+            sensor_id: String::from(sensor_id),
             thermal_mass: 10.0,    // Small sensor
             heat_transfer: 0.1,    // Moderate insulation
             noise_std: 0.1,        // ±0.1°C noise
@@ -312,7 +321,7 @@ impl PressureModel {
     /// Create with default parameters
     pub fn new(sensor_id: &str) -> Self {
         Self {
-            sensor_id: sensor_id.to_string(),
+            sensor_id: String::from(sensor_id),
             noise_std: 0.1,         // ±0.1 hPa noise
             min_pressure: 300.0,    // ~9000m altitude
             max_pressure: 1100.0,   // Storm conditions
@@ -461,7 +470,7 @@ impl HumidityModel {
     /// Create with default parameters
     pub fn new(sensor_id: &str) -> Self {
         Self {
-            sensor_id: sensor_id.to_string(),
+            sensor_id: String::from(sensor_id),
             noise_std: 2.0,      // ±2% RH noise
             hysteresis: 1.0,     // ±1% RH hysteresis
             response_time: 8000.0, // 8 second response

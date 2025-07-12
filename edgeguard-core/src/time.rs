@@ -104,6 +104,15 @@
 //! }
 //! ```
 
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(not(feature = "std"))]
+use alloc::boxed::Box;
+
+#[cfg(feature = "std")]
+use std::boxed::Box;
+
 /// Timestamp in milliseconds since epoch (or device boot for monotonic)
 pub type Timestamp = u64;
 

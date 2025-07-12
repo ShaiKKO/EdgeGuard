@@ -297,6 +297,10 @@ impl<const N: usize> Default for CircularBuffer<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "std"))]
+    use alloc::vec::Vec;
+    #[cfg(not(feature = "std"))]
+    use alloc::vec;
     
     #[test]
     fn empty_buffer() {

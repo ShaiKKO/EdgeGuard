@@ -39,6 +39,15 @@
 //!     .build();
 //! ```
 
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(not(feature = "std"))]
+use alloc::boxed::Box;
+
+#[cfg(feature = "std")]
+use std::boxed::Box;
+
 use heapless::Vec;
 use heapless::FnvIndexMap;
 

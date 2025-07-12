@@ -457,6 +457,79 @@ const ALTITUDE_ADJUSTMENTS: [f32; 56] = [
     -490.0, -498.0, -507.0, -515.0, -524.0, // 4600m to 5000m
 ];
 
+// Trigonometric lookup functions for no-std environments
+// These provide fast approximations for common angles
+
+/// Sine lookup table for angles 0 to 2π in steps of π/32
+/// This gives us 64 entries with reasonable precision
+const SIN_TABLE: [f32; 64] = [
+    0.0000, 0.0980, 0.1951, 0.2903, 0.3827, 0.4714, 0.5556, 0.6344,
+    0.7071, 0.7730, 0.8315, 0.8819, 0.9239, 0.9569, 0.9808, 0.9952,
+    1.0000, 0.9952, 0.9808, 0.9569, 0.9239, 0.8819, 0.8315, 0.7730,
+    0.7071, 0.6344, 0.5556, 0.4714, 0.3827, 0.2903, 0.1951, 0.0980,
+    0.0000, -0.0980, -0.1951, -0.2903, -0.3827, -0.4714, -0.5556, -0.6344,
+    -0.7071, -0.7730, -0.8315, -0.8819, -0.9239, -0.9569, -0.9808, -0.9952,
+    -1.0000, -0.9952, -0.9808, -0.9569, -0.9239, -0.8819, -0.8315, -0.7730,
+    -0.7071, -0.6344, -0.5556, -0.4714, -0.3827, -0.2903, -0.1951, -0.0980,
+];
+
+/// Fast sine approximation using lookup table
+/// Input angle in radians, output in range [-1, 1]
+pub fn sin_lookup(angle_rad: f32) -> Option<f32> {
+    // Normalize angle to [0, 2π]
+    let two_pi = 2.0 * 3.14159265;
+    let normalized = angle_rad % two_pi;
+    let positive = if normalized < 0.0 { normalized + two_pi } else { normalized };
+    
+    // Convert to table index (64 entries for 2π)
+    let idx_f = positive * 64.0 / two_pi;
+    let idx = idx_f as usize;
+    
+    if idx >= 64 {
+        return Some(SIN_TABLE[0]); // Wrap around
+    }
+    
+    // Linear interpolation for better precision
+    let frac = idx_f - idx as f32;
+    let base = SIN_TABLE[idx];
+    
+    if idx + 1 < 64 {
+        let next = SIN_TABLE[idx + 1];
+        Some(base + frac * (next - base))
+    } else {
+        // Wrap to first entry
+        let next = SIN_TABLE[0];
+        Some(base + frac * (next - base))
+    }
+}
+
+/// Fast cosine approximation using lookup table
+/// Input angle in radians, output in range [-1, 1]
+pub fn cos_lookup(angle_rad: f32) -> Option<f32> {
+    // cos(x) = sin(x + π/2)
+    sin_lookup(angle_rad + 1.5707963)
+}
+
+/// Fast tangent approximation
+/// Input angle in radians
+/// Returns None for angles near ±π/2 where tan approaches infinity
+pub fn tan_lookup(angle_rad: f32) -> Option<f32> {
+    let sin_val = sin_lookup(angle_rad)?;
+    let cos_val = cos_lookup(angle_rad)?;
+    
+    // Avoid division by very small numbers
+    if cos_val.abs() < 0.01 {
+        return None;
+    }
+    
+    Some(sin_val / cos_val)
+}
+
+/// Convert dew point lookup result to proper function
+pub fn dew_point_lookup(temp_c: f32, rh_percent: f32) -> Option<f32> {
+    DEW_POINT_STANDARD.lookup(temp_c, rh_percent).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

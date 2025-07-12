@@ -111,6 +111,15 @@ pub use confidence::{ConfidenceScore, ConfidenceScorer};
 pub use models::{SensorModel, StateTransition, ekf_models};
 pub use pipeline::FusionStage;
 
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(not(feature = "std"))]
+use alloc::boxed::Box;
+
+#[cfg(feature = "std")]
+use std::boxed::Box;
+
 use crate::{
     time::Timestamp,
     errors::ValidationError,
@@ -615,9 +624,21 @@ impl<const M: usize> FusionAlgorithm<1, M> for ConsensusVoting<M> {
         // Calculate mean and standard deviation
         let mean = active_measurements.iter().sum::<f32>() / active_measurements.len() as f32;
         let variance = active_measurements.iter()
-            .map(|x| (x - mean).powi(2))
+            .map(|x| {
+                let diff = x - mean;
+                diff * diff  // Square without powi
+            })
             .sum::<f32>() / active_measurements.len() as f32;
-        let std_dev = variance.sqrt();
+        // Fast square root approximation for no_std
+        let std_dev = if variance == 0.0 {
+            0.0
+        } else {
+            // Newton's method approximation (2 iterations is usually enough)
+            let mut x = variance;
+            x = (x + variance / x) * 0.5;
+            x = (x + variance / x) * 0.5;
+            x
+        };
         
         // Filter outliers
         let mut valid_measurements = heapless::Vec::<f32, M>::new();

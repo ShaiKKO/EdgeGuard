@@ -396,6 +396,8 @@ impl<const N: usize> EventQueue<N> {
 mod tests {
     use super::*;
     use crate::events::{EventBuilder, SensorType};
+    #[cfg(not(feature = "std"))]
+    use alloc::vec::Vec;
     
     #[test]
     fn queue_basic() {
