@@ -99,7 +99,7 @@ pub enum FusionAlgorithmType {
 /// Dynamic fusion algorithm trait
 /// 
 /// Allows different Kalman filter dimensions to be used dynamically
-trait FusionAlgorithmDyn: Send {
+pub trait FusionAlgorithmDyn: Send {
     fn predict(&mut self, dt_ms: u32) -> Result<(), FusionError>;
     fn update(
         &mut self,

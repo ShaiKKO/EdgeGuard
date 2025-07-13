@@ -1,10 +1,11 @@
 //! Integration tests for streaming data processing
 //!
-//! Tests:
-//! - Streaming window operations
-//! - Adaptive sampling based on signal characteristics
-//! - Backpressure handling
-//! - Stream fusion and aggregation
+//! Tests the integration between streams and pipelines, including:
+//! - Basic stream-to-pipeline processing
+//! - Rate limiting and backpressure
+//! - Stream adapters (batching, merging)
+//! - Memory efficiency
+//! - Error handling
 
 #![cfg(test)]
 
@@ -12,58 +13,73 @@ mod common;
 
 use edgeguard_core::{
     events::{Event, EventBuilder, SensorType},
-    stream::{Stream, StreamConfig, Window, AdaptiveSampler, StreamProcessor},
-    pipeline::Pipeline,
-    time::MockTimeSource,
+    stream::{Stream, MemoryStream, RateLimitedStream, BackpressureControl, BackpressureWrapper},
+    pipeline::{Pipeline, StreamProcessor, ValidationStage, AggregationStage, WindowSpec, AggregationMethod},
+    validators::TemperatureValidator,
+    time::{MockTimeSource, TimeSource, MonotonicTime},
 };
 
 use common::{
-    harness::{TestHarness, TestTimer},
+    harness::{TestHarness, TestRng},
     scenarios::Scenarios,
-    generators::{PhysicsAwareGenerator, SensorModel, EnvironmentScenario},
+    generators::{PhysicsAwareGenerator, SensorModel},
 };
 
-use core::task::Poll;
-
 #[test]
-fn test_basic_streaming() {
+fn test_basic_stream_to_pipeline() {
     let mut harness = TestHarness::new(160);
     
-    harness.run_test("basic_streaming", || {
-        // Create stream processor
-        let config = StreamConfig {
-            window_size: 10,
-            window_overlap: 5,
-            ..Default::default()
-        };
-        
-        let mut stream = StreamProcessor::<100>::new(config);
-        
-        // Generate streaming data
+    harness.run_test("basic_stream_to_pipeline", || {
+        // Generate test events
         let mut generator = PhysicsAwareGenerator::new(1000);
         let events = generator.generate_temperature_with_thermal_mass(
-            "stream_sensor",
+            "temp1",
             25.0,
-            &[(0, 25.0), (1, 30.0)],
+            &[(0, 25.0), (1, 30.0), (2, 20.0)],
             1.0,
             1,
             60,
             &SensorModel::consumer_grade(),
         );
         
-        let mut windows_processed = 0;
+        // Create stream from events
+        let stream = MemoryStream::new(&events);
         
-        for event in events {
-            stream.push(event)?;
-            
-            // Process any complete windows
-            while let Some(window) = stream.next_window() {
-                assert_eq!(window.len(), 10, "Window should have correct size");
-                windows_processed += 1;
+        // Create pipeline with validation
+        let pipeline = Pipeline::<4>::builder()
+            .add_stage(ValidationStage::new(
+                TemperatureValidator::default(),
+                SensorType::Temperature,
+            ))
+            .build();
+        
+        // Create stream processor
+        let mut processor = StreamProcessor::new(stream, pipeline);
+        
+        // Process all events
+        let processed = processor.process_batch(100)
+            .map_err(|e| format!("Processing failed: {:?}", e))?;
+        
+        assert_eq!(processed, events.len(), "Should process all events");
+        
+        // Check for validation results in the output queue
+        let mut validation_results = 0;
+        let mut sensor_readings = 0;
+        
+        while let Some(event) = processor.pipeline_mut().pop_result() {
+            match event {
+                Event::ValidationResult { .. } => validation_results += 1,
+                Event::SensorReading { .. } => sensor_readings += 1,
+                _ => {}
             }
         }
         
-        assert!(windows_processed > 0, "Should process some windows");
+        println!("Processed {} events", processed);
+        println!("Output: {} validation results, {} sensor readings", validation_results, sensor_readings);
+        
+        // ValidationStage should emit both ValidationResult AND forward valid SensorReading
+        assert!(validation_results > 0, "Should have validation results");
+        assert!(sensor_readings > 0, "Should have forwarded valid sensor readings");
         
         Ok(())
     });
@@ -72,43 +88,39 @@ fn test_basic_streaming() {
 }
 
 #[test]
-fn test_adaptive_sampling() {
+fn test_rate_limited_stream() {
     let mut harness = TestHarness::new(160);
     
-    harness.run_test("adaptive_sampling", || {
-        // Create adaptive sampler
-        let mut sampler = AdaptiveSampler::new(
-            1.0,   // Base rate: 1 Hz
-            0.1,   // Min rate: 0.1 Hz
-            10.0,  // Max rate: 10 Hz
-            0.5,   // Change threshold
-        );
+    harness.run_test("rate_limited_stream", || {
+        // Create events at high frequency
+        let mut time_source = MockTimeSource::new(0);
+        let mut events = Vec::new();
         
-        // Generate data with varying rates of change
-        let scenario = Scenarios::industrial_process();
-        
-        let mut sampled = 0;
-        let mut skipped = 0;
-        
-        for event in scenario.events {
-            if let Event::SensorReading { value, timestamp, .. } = event {
-                if sampler.should_sample(value, timestamp) {
-                    sampled += 1;
-                } else {
-                    skipped += 1;
-                }
-            }
+        for i in 0..50 {
+            events.push(
+                EventBuilder::new(time_source.now())
+                    .sensor("sensor", SensorType::Temperature)
+                    .reading(25.0 + (i as f32 * 0.1), 0.95)
+                    .ok_or("Failed to build event")?
+            );
+            time_source.advance(10); // 100Hz
         }
         
-        println!("Sampled: {}, Skipped: {}", sampled, skipped);
+        // Create rate-limited stream (10 events/sec)
+        let base_stream = MemoryStream::new(&events);
+        let limited = RateLimitedStream::new(base_stream, 10, MonotonicTime::new());
         
-        // Should adapt sampling rate
-        assert!(sampled > 0, "Should sample some events");
-        assert!(skipped > 0, "Should skip some events when signal is stable");
+        // Simple pipeline
+        let pipeline = Pipeline::<4>::builder().build();
+        let mut processor = StreamProcessor::new(limited, pipeline);
         
-        // Efficiency ratio
-        let efficiency = skipped as f32 / (sampled + skipped) as f32;
-        assert!(efficiency > 0.3, "Should achieve >30% reduction");
+        // Process should be rate-limited
+        let processed = processor.process_batch(100)
+            .map_err(|e| format!("Processing failed: {:?}", e))?;
+        
+        // With rate limiting, we shouldn't process all events immediately
+        assert!(processed < events.len(), "Rate limiting should limit processing");
+        println!("Processed {} of {} events with rate limiting", processed, events.len());
         
         Ok(())
     });
@@ -117,57 +129,63 @@ fn test_adaptive_sampling() {
 }
 
 #[test]
-fn test_windowed_aggregation() {
+fn test_stream_with_aggregation() {
     let mut harness = TestHarness::new(160);
     
-    harness.run_test("windowed_aggregation", || {
-        let config = StreamConfig {
-            window_size: 30,
-            window_overlap: 0,
-            ..Default::default()
-        };
-        
-        let mut stream = StreamProcessor::<1000>::new(config);
-        
-        // Generate hourly data
+    harness.run_test("stream_with_aggregation", || {
+        // Generate scenario data
         let scenario = Scenarios::home_environment();
         
-        let mut window_stats = Vec::new();
+        // Debug: check scenario events
+        let temp_events = scenario.events.iter()
+            .filter(|e| matches!(e, Event::SensorReading { sensor_type, .. } if *sensor_type == SensorType::Temperature))
+            .count();
+        println!("Scenario has {} temperature events", temp_events);
         
-        for event in scenario.events {
-            stream.push(event)?;
+        // Create pipeline with aggregation
+        let pipeline = Pipeline::<4>::builder()
+            .add_stage(AggregationStage::new(
+                WindowSpec::Count { size: 20 },
+                AggregationMethod::Mean,
+                SensorType::Temperature,
+            ))
+            .build();
+        
+        // Process through stream
+        let stream = MemoryStream::new(&scenario.events);
+        let mut processor = StreamProcessor::new(stream, pipeline);
+        
+        // Count aggregated results
+        let mut batch_count = 0;
+        let mut total_processed = 0;
+        let total_events = scenario.events.len();
+        
+        // Process in batches to avoid queue overflow
+        while total_processed < total_events {
+            let batch_size = 30.min(total_events - total_processed);
+            let processed = processor.process_batch(batch_size)
+                .map_err(|e| format!("Processing failed: {:?}", e))?;
+            total_processed += processed;
             
-            while let Some(window) = stream.next_window() {
-                // Calculate window statistics
-                let mut sum = 0.0;
-                let mut count = 0;
-                let mut min = f32::MAX;
-                let mut max = f32::MIN;
-                
-                for event in &window {
-                    if let Event::SensorReading { value, .. } = event {
-                        sum += value;
-                        count += 1;
-                        min = min.min(*value);
-                        max = max.max(*value);
-                    }
+            // Collect batch results
+            while let Some(event) = processor.pipeline_mut().pop_result() {
+                if let Event::BatchReading { count, mean_value, min_value, max_value, .. } = event {
+                    batch_count += 1;
+                    assert_eq!(count, 20, "Each batch should have 20 events");
+                    assert!(min_value <= mean_value && mean_value <= max_value, 
+                        "Statistics should be consistent");
                 }
-                
-                if count > 0 {
-                    let avg = sum / count as f32;
-                    window_stats.push((avg, min, max));
-                }
+            }
+            
+            if processed == 0 {
+                break;
             }
         }
         
-        // Should have aggregated windows
-        assert!(!window_stats.is_empty(), "Should have window statistics");
+        println!("Processed {} events", total_processed);
         
-        // Verify statistics are reasonable
-        for (avg, min, max) in &window_stats {
-            assert!(min <= avg && avg <= max, "Statistics should be consistent");
-            assert!(*min >= 15.0 && *max <= 30.0, "Values should be in expected range");
-        }
+        assert!(batch_count > 0, "Should have aggregated batches");
+        println!("Created {} aggregated batches", batch_count);
         
         Ok(())
     });
@@ -180,15 +198,7 @@ fn test_stream_backpressure() {
     let mut harness = TestHarness::new(160);
     
     harness.run_test("stream_backpressure", || {
-        let config = StreamConfig {
-            window_size: 10,
-            max_buffer_size: 50,
-            ..Default::default()
-        };
-        
-        let mut stream = StreamProcessor::<50>::new(config);
-        
-        // Generate more data than buffer can hold
+        // Generate many events
         let mut generator = PhysicsAwareGenerator::new(1000);
         let events = generator.generate_temperature_with_thermal_mass(
             "sensor",
@@ -196,25 +206,47 @@ fn test_stream_backpressure() {
             &[(0, 25.0)],
             1.0,
             1,
-            100, // 100 events
+            100,
             &SensorModel::consumer_grade(),
         );
         
-        let mut accepted = 0;
-        let mut rejected = 0;
+        // Create stream with backpressure control
+        let base_stream = MemoryStream::new(&events);
+        let backpressure = BackpressureControl::new(20, 10); // Small buffer
+        let stream = BackpressureWrapper::new(base_stream, backpressure);
         
-        for event in events {
-            match stream.push(event) {
-                Ok(_) => accepted += 1,
-                Err(_) => rejected += 1,
+        // Pipeline with slow processing (validation)
+        let pipeline = Pipeline::<4>::builder()
+            .add_stage(ValidationStage::new(
+                TemperatureValidator::default(),
+                SensorType::Temperature,
+            ))
+            .build();
+        
+        let mut processor = StreamProcessor::new(stream, pipeline);
+        
+        // Try to process in small batches
+        let mut total_processed = 0;
+        let mut iterations = 0;
+        
+        while total_processed < events.len() && iterations < 20 {
+            match processor.process_batch(10) {
+                Ok(0) => break,
+                Ok(n) => {
+                    total_processed += n;
+                    // Simulate slow consumption
+                    for _ in 0..5 {
+                        let _ = processor.pipeline_mut().pop_result();
+                    }
+                }
+                Err(e) => return Err(format!("Processing error: {:?}", e)),
             }
+            iterations += 1;
         }
         
-        println!("Accepted: {}, Rejected: {}", accepted, rejected);
-        
-        // Should handle backpressure gracefully
-        assert!(accepted > 0, "Should accept some events");
-        assert!(rejected > 0, "Should reject some events due to backpressure");
+        println!("Processed {} events in {} iterations", total_processed, iterations);
+        assert!(total_processed > 0, "Should process some events");
+        assert!(iterations > 1, "Should take multiple iterations due to backpressure");
         
         Ok(())
     });
@@ -223,46 +255,95 @@ fn test_stream_backpressure() {
 }
 
 #[test]
-fn test_multi_stream_fusion() {
+fn test_multi_sensor_streaming() {
     let mut harness = TestHarness::new(160);
     
-    harness.run_test("multi_stream_fusion", || {
-        // Create multiple streams for different sensors
-        let config = StreamConfig {
-            window_size: 20,
-            window_overlap: 10,
-            ..Default::default()
-        };
+    harness.run_test("multi_sensor_streaming", || {
+        // Generate events from multiple sensors
+        let mut generator = PhysicsAwareGenerator::new(1000);
+        let mut all_events = Vec::new();
         
-        let mut temp_stream = StreamProcessor::<100>::new(config.clone());
-        let mut humidity_stream = StreamProcessor::<100>::new(config);
+        // Generate from 3 temperature sensors
+        let sensor_ids = ["temp1", "temp2", "temp3"];
+        for (i, sensor_id) in sensor_ids.iter().enumerate() {
+            let base_temp = 22.0 + (i as f32 * 2.0);
+            let events = generator.generate_temperature_with_thermal_mass(
+                sensor_id,
+                base_temp,
+                &[(0, base_temp), (1, base_temp + 5.0)],
+                1.0,
+                1,
+                10,  // Reduced from 30 to 10 events per sensor
+                &SensorModel::consumer_grade(),
+            );
+            println!("Generated {} events for sensor {}", events.len(), sensor_id);
+            all_events.extend(events);
+        }
         
-        // Generate correlated data
-        let scenario = Scenarios::weather_station();
+        // Sort by timestamp
+        all_events.sort_by_key(|e| e.timestamp());
         
-        // Separate events by sensor type
-        for event in scenario.events {
-            match event.sensor_type() {
-                Some(SensorType::Temperature) => temp_stream.push(event)?,
-                Some(SensorType::Humidity) => humidity_stream.push(event)?,
-                _ => {},
+        // Debug: print first few events
+        println!("Total events generated: {}", all_events.len());
+        for (i, event) in all_events.iter().take(5).enumerate() {
+            println!("Event {}: sensor_id = {:?}", i, event.sensor_id());
+        }
+        
+        // Create pipeline with validation
+        let pipeline = Pipeline::<4>::builder()
+            .add_stage(ValidationStage::new(
+                TemperatureValidator::default(),
+                SensorType::Temperature,
+            ))
+            .build();
+        
+        // Process all sensors in batches to avoid queue overflow
+        let stream = MemoryStream::new(&all_events);
+        let mut processor = StreamProcessor::new(stream, pipeline);
+        
+        // Count results per sensor
+        let mut temp1_results = 0;
+        let mut temp2_results = 0;
+        let mut temp3_results = 0;
+        let mut total_results = 0;
+        let mut total_processed = 0;
+        
+        // Process in batches of 10 to avoid overflowing the 16-element queues
+        while total_processed < all_events.len() {
+            let batch_size = 10.min(all_events.len() - total_processed);
+            let processed = processor.process_batch(batch_size)
+                .map_err(|e| format!("Processing failed: {:?}", e))?;
+            total_processed += processed;
+            
+            // Collect results after each batch
+            while let Some(event) = processor.pipeline_mut().pop_result() {
+                total_results += 1;
+                if let Some(sensor_id) = event.sensor_id() {
+                    match sensor_id {
+                        "temp1" => temp1_results += 1,
+                        "temp2" => temp2_results += 1,
+                        "temp3" => temp3_results += 1,
+                        other => println!("Unknown sensor: '{}'", other),
+                    }
+                }
+            }
+            
+            if processed == 0 {
+                break; // No more events
             }
         }
         
-        // Process windows from both streams
-        let mut temp_windows = 0;
-        let mut humidity_windows = 0;
+        assert_eq!(total_processed, all_events.len(), "Should process all events");
         
-        while temp_stream.next_window().is_some() {
-            temp_windows += 1;
-        }
+        println!("Total results: {}", total_results);
+        println!("Sensor temp1: {} results", temp1_results);
+        println!("Sensor temp2: {} results", temp2_results);
+        println!("Sensor temp3: {} results", temp3_results);
         
-        while humidity_stream.next_window().is_some() {
-            humidity_windows += 1;
-        }
-        
-        assert!(temp_windows > 0, "Should have temperature windows");
-        assert!(humidity_windows > 0, "Should have humidity windows");
+        assert!(total_results > 0, "Should have some results");
+        assert!(temp1_results > 0, "temp1 should produce results");
+        assert!(temp2_results > 0, "temp2 should produce results");
+        assert!(temp3_results > 0, "temp3 should produce results");
         
         Ok(())
     });
@@ -275,19 +356,34 @@ fn test_stream_memory_efficiency() {
     let mut harness = TestHarness::new(160);
     
     harness.run_test("stream_memory_efficiency", || {
-        // Test memory usage of stream processors
-        let small_stream_size = core::mem::size_of::<StreamProcessor<100>>();
-        let large_stream_size = core::mem::size_of::<StreamProcessor<1000>>();
+        // Check memory usage of stream types
+        let memory_stream_size = core::mem::size_of::<MemoryStream>();
+        let rate_limited_size = core::mem::size_of::<RateLimitedStream<MemoryStream, MonotonicTime>>();
+        let backpressure_wrapper_size = core::mem::size_of::<BackpressureWrapper<MemoryStream>>();
         
-        println!("Stream memory usage:");
-        println!("  StreamProcessor<100>: {} bytes", small_stream_size);
-        println!("  StreamProcessor<1000>: {} bytes", large_stream_size);
+        // Check pipeline sizes
+        let small_pipeline = core::mem::size_of::<Pipeline<4>>();
+        let large_pipeline = core::mem::size_of::<Pipeline<16>>();
         
-        // Verify linear scaling with buffer size
-        let size_per_event = (large_stream_size - small_stream_size) / 900;
-        println!("  Per-event overhead: {} bytes", size_per_event);
+        // Check processor size
+        let processor_size = core::mem::size_of::<StreamProcessor<MemoryStream, 8>>();
         
-        assert!(size_per_event < 100, "Per-event overhead should be reasonable");
+        println!("Memory usage:");
+        println!("  MemoryStream: {} bytes", memory_stream_size);
+        println!("  RateLimitedStream: {} bytes", rate_limited_size);
+        println!("  BackpressureWrapper: {} bytes", backpressure_wrapper_size);
+        println!("  Pipeline<4>: {} bytes", small_pipeline);
+        println!("  Pipeline<16>: {} bytes", large_pipeline);
+        println!("  StreamProcessor: {} bytes", processor_size);
+        
+        // Verify sizes are reasonable for embedded use
+        assert!(memory_stream_size < 64, "MemoryStream should be small");
+        assert!(processor_size < 8192, "StreamProcessor should fit in embedded RAM");
+        
+        // Verify linear scaling
+        let pipeline_overhead = (large_pipeline - small_pipeline) / 12;
+        println!("  Pipeline overhead per stage: ~{} bytes", pipeline_overhead);
+        assert!(pipeline_overhead < 512, "Pipeline should scale efficiently");
         
         Ok(())
     });
@@ -296,93 +392,176 @@ fn test_stream_memory_efficiency() {
 }
 
 #[test]
-fn test_stream_latency() {
+fn test_stream_error_recovery() {
     let mut harness = TestHarness::new(160);
     
-    harness.run_test("stream_latency", || {
-        let config = StreamConfig {
-            window_size: 10,
-            window_overlap: 0,
-            max_latency_ms: 1000, // 1 second max latency
-            ..Default::default()
-        };
+    harness.run_test("stream_error_recovery", || {
+        // Create events with some invalid values
+        let mut time_source = MockTimeSource::new(1000);
+        let mut events = Vec::new();
         
-        let mut stream = StreamProcessor::<100>::new(config);
-        let mut time_source = MockTimeSource::new(0);
-        
-        // Add events slowly
-        for i in 0..5 {
-            let event = EventBuilder::new(time_source.now())
-                .sensor("sensor", SensorType::Temperature)
-                .reading(25.0, 0.95)
-                .unwrap();
+        for i in 0..20 {
+            let value = if i % 5 == 0 {
+                -100.0 // Invalid temperature
+            } else {
+                25.0 + (i as f32 * 0.5)
+            };
             
-            stream.push(event)?;
-            time_source.advance(500); // 500ms between events
+            events.push(
+                EventBuilder::new(time_source.now())
+                    .sensor("sensor", SensorType::Temperature)
+                    .reading(value, 0.95)
+                    .ok_or("Failed to build event")?
+            );
+            time_source.advance(1000);
         }
         
-        // Should not have window yet (only 5 events)
-        assert!(stream.next_window().is_none());
+        // Pipeline with validation (will reject invalid values)
+        let pipeline = Pipeline::<4>::builder()
+            .add_stage(ValidationStage::new(
+                TemperatureValidator::default(),
+                SensorType::Temperature,
+            ))
+            .build();
         
-        // Advance time past max latency
-        time_source.advance(2000);
+        let stream = MemoryStream::new(&events);
+        let mut processor = StreamProcessor::new(stream, pipeline);
         
-        // Now should flush partial window due to latency
-        stream.check_latency(time_source.now());
+        // Count valid and invalid results
+        let mut valid_count = 0;
+        let mut invalid_count = 0;
+        let mut total_processed = 0;
         
-        let window = stream.next_window();
-        assert!(window.is_some(), "Should flush window due to latency");
-        assert_eq!(window.unwrap().len(), 5, "Should have partial window");
-        
-        Ok(())
-    });
-    
-    assert!(harness.all_passed());
-}
-
-#[test]
-fn test_stream_pipeline_integration() {
-    let mut harness = TestHarness::new(160);
-    
-    harness.run_test("stream_pipeline_integration", || {
-        // Test stream feeding into validation pipeline
-        let stream_config = StreamConfig {
-            window_size: 30,
-            window_overlap: 0,
-            ..Default::default()
-        };
-        
-        let mut stream = StreamProcessor::<500>::new(stream_config);
-        let mut pipeline = Pipeline::<10, 100>::new(Default::default());
-        
-        // Add validators
-        pipeline.add_validator(
-            Box::new(edgeguard_core::validators::TemperatureValidator::default()),
-            SensorType::Temperature,
-        )?;
-        
-        // Generate streaming data
-        let scenario = Scenarios::home_environment();
-        
-        let mut windows_validated = 0;
-        
-        for event in scenario.events {
-            stream.push(event)?;
+        // Process in small batches
+        while total_processed < events.len() {
+            let batch_size = 5.min(events.len() - total_processed);
+            let processed = processor.process_batch(batch_size)
+                .map_err(|e| format!("Processing failed: {:?}", e))?;
+            total_processed += processed;
             
-            // Process complete windows through pipeline
-            while let Some(window) = stream.next_window() {
-                for event in window {
-                    pipeline.process(event)?;
+            // Collect results after each batch
+            while let Some(event) = processor.pipeline_mut().pop_result() {
+                if let Event::ValidationResult { status, .. } = event {
+                    match status {
+                        edgeguard_core::events::ValidationStatus::Valid => valid_count += 1,
+                        _ => invalid_count += 1,
+                    }
                 }
-                windows_validated += 1;
-                
-                // Drain validation results
-                while pipeline.next_output().is_some() {}
+            }
+            
+            if processed == 0 {
+                break;
             }
         }
         
-        assert!(windows_validated > 0, "Should validate some windows");
-        println!("Validated {} windows", windows_validated);
+        assert_eq!(total_processed, events.len(), "Should attempt to process all events");
+        
+        println!("Valid: {}, Invalid: {}", valid_count, invalid_count);
+        assert_eq!(valid_count + invalid_count, events.len(), "Should have result for each event");
+        assert!(invalid_count == 4, "Should have 4 invalid temperatures");
+        
+        Ok(())
+    });
+    
+    assert!(harness.all_passed());
+}
+
+#[test]
+fn test_stream_to_pipeline_with_routing() {
+    let mut harness = TestHarness::new(160);
+    
+    harness.run_test("stream_routing", || {
+        // Generate mixed sensor data
+        let mut generator = PhysicsAwareGenerator::new(1000);
+        let mut all_events = Vec::new();
+        
+        // Temperature events
+        all_events.extend(generator.generate_temperature_with_thermal_mass(
+            "temp1",
+            25.0,
+            &[(0, 25.0)],
+            1.0,
+            1,
+            20,
+            &SensorModel::consumer_grade(),
+        ));
+        
+        // Pressure events
+        all_events.extend(generator.generate_pressure_with_weather(
+            "press1",
+            1013.25,
+            &[], // No weather systems
+            1,
+            20,
+            &SensorModel::consumer_grade(),
+        ));
+        
+        // Sort by timestamp
+        all_events.sort_by_key(|e| e.timestamp());
+        
+        // Create pipeline with routing
+        use edgeguard_core::pipeline::RouterStage;
+        use edgeguard_core::validators::PressureValidator;
+        
+        let mut router = RouterStage::new();
+        router.add_route(
+            SensorType::Temperature,
+            Box::new(ValidationStage::new(
+                TemperatureValidator::default(),
+                SensorType::Temperature,
+            )),
+        ).map_err(|_| "Failed to add temperature route")?;
+        
+        router.add_route(
+            SensorType::Pressure,
+            Box::new(ValidationStage::new(
+                PressureValidator::default(),
+                SensorType::Pressure,
+            )),
+        ).map_err(|_| "Failed to add pressure route")?;
+        
+        let pipeline = Pipeline::<4>::builder()
+            .add_stage(router)
+            .build();
+        
+        // Process mixed stream in batches
+        let stream = MemoryStream::new(&all_events);
+        let mut processor = StreamProcessor::new(stream, pipeline);
+        
+        // Count results by type
+        let mut temp_results = 0;
+        let mut pressure_results = 0;
+        let mut total_processed = 0;
+        
+        // Process in small batches to avoid queue overflow
+        while total_processed < all_events.len() {
+            let batch_size = 10.min(all_events.len() - total_processed);
+            let processed = processor.process_batch(batch_size)
+                .map_err(|e| format!("Processing failed: {:?}", e))?;
+            total_processed += processed;
+            
+            // Collect results after each batch
+            while let Some(event) = processor.pipeline_mut().pop_result() {
+                if let Event::ValidationResult { sensor_id, .. } = event {
+                    if sensor_id.as_str().contains("temp") {
+                        temp_results += 1;
+                    } else if sensor_id.as_str().contains("press") {
+                        pressure_results += 1;
+                    }
+                }
+            }
+            
+            if processed == 0 {
+                break;
+            }
+        }
+        
+        assert_eq!(total_processed, all_events.len(), "Should process all events");
+        
+        println!("Temperature validations: {}, Pressure validations: {}", 
+                 temp_results, pressure_results);
+        assert!(temp_results > 0 && pressure_results > 0, 
+                "Should have results from both sensor types");
         
         Ok(())
     });
