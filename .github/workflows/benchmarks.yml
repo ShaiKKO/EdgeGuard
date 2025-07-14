@@ -1,0 +1,163 @@
+name: Performance Benchmarks
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly on Monday at 2 AM
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  benchmark:
+    name: Run Performance Benchmarks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+        
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: "edgeguard -> target"
+        
+    - name: Install benchmark dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+        
+    - name: Run performance benchmarks
+      run: |
+        cd edgeguard/edgeguard-core
+        cargo bench --bench performance_benchmarks
+        
+    - name: Run memory benchmarks
+      run: |
+        cd edgeguard/edgeguard-core
+        cargo bench --bench memory_benchmarks
+        
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-results
+        path: |
+          edgeguard/edgeguard-core/target/criterion/
+          edgeguard/edgeguard-core/benchmark_report.md
+        retention-days: 30
+        
+    - name: Check performance regression
+      run: |
+        cd edgeguard/edgeguard-core
+        # Simple regression check - ensure critical benchmarks run
+        if [ ! -d "target/criterion/validators" ]; then
+          echo "❌ Validator benchmarks failed"
+          exit 1
+        fi
+        
+        if [ ! -d "target/criterion/pipeline_throughput" ]; then
+          echo "❌ Pipeline throughput benchmarks failed"
+          exit 1
+        fi
+        
+        echo "✅ All benchmarks completed successfully"
+
+  benchmark-embedded:
+    name: Embedded Platform Benchmarks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: thumbv7em-none-eabihf
+        
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+      
+    - name: Check ESP32 build
+      run: |
+        cd edgeguard/edgeguard-core
+        cargo check --target thumbv7em-none-eabihf --no-default-features --features embedded
+        
+    - name: Check binary size
+      run: |
+        cd edgeguard/edgeguard-core
+        cargo build --target thumbv7em-none-eabihf --release --no-default-features --features embedded
+        
+        # Check binary size limits
+        SIZE=$(ls -la target/thumbv7em-none-eabihf/release/libedgeguard_core.rlib | awk '{print $5}')
+        echo "Binary size: $SIZE bytes"
+        
+        # Warn if size exceeds targets
+        if [ "$SIZE" -gt 1000000 ]; then
+          echo "⚠️  Binary size exceeds 1MB target"
+        fi
+        
+        if [ "$SIZE" -gt 500000 ]; then
+          echo "⚠️  Binary size exceeds 500KB target"
+        fi
+        
+        echo "✅ ESP32 build check completed"
+
+  benchmark-comparison:
+    name: Benchmark Comparison
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - name: Checkout PR
+      uses: actions/checkout@v4
+      
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+      
+    - name: Run benchmarks on PR
+      run: |
+        cd edgeguard/edgeguard-core
+        cargo bench --bench performance_benchmarks > pr_benchmarks.txt
+        
+    - name: Checkout main
+      uses: actions/checkout@v4
+      with:
+        ref: main
+        path: main
+        
+    - name: Run benchmarks on main
+      run: |
+        cd main/edgeguard/edgeguard-core
+        cargo bench --bench performance_benchmarks > main_benchmarks.txt
+        
+    - name: Compare results
+      run: |
+        echo "## Benchmark Comparison" > comparison.md
+        echo "" >> comparison.md
+        echo "### PR vs Main Branch" >> comparison.md
+        echo "" >> comparison.md
+        echo "This is a simplified comparison. See full results in artifacts." >> comparison.md
+        echo "" >> comparison.md
+        echo "**Note**: Detailed performance analysis requires manual review of criterion reports." >> comparison.md
+        
+    - name: Upload comparison
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-comparison
+        path: |
+          comparison.md
+          edgeguard/edgeguard-core/pr_benchmarks.txt
+          main/edgeguard/edgeguard-core/main_benchmarks.txt
