@@ -96,19 +96,8 @@ pub enum FusionAlgorithmType {
     SimpleAverage,
 }
 
-/// Dynamic fusion algorithm trait
-/// 
-/// Allows different Kalman filter dimensions to be used dynamically
-pub trait FusionAlgorithmDyn: Send {
-    fn predict(&mut self, dt_ms: u32) -> Result<(), FusionError>;
-    fn update(
-        &mut self,
-        measurements: &[f32],
-        timestamp: Timestamp,
-    ) -> Result<(f32, ConfidenceScore), FusionError>;
-    fn has_converged(&self) -> bool;
-    fn reset(&mut self);
-}
+// Re-export dynamic fusion trait
+pub use crate::traits::FusionAlgorithmDyn;
 
 // Implement dynamic trait for concrete Kalman filters
 impl<const N: usize, const M: usize> FusionAlgorithmDyn for KalmanFilter<N, M> {
@@ -281,7 +270,7 @@ impl FusionStage {
                     timestamp,
                 };
                 
-                let _ = output.emit(event);
+                let _ = output.push(event);
                 
                 // Also create a synthetic sensor reading for downstream stages
                 let reading = Event::SensorReading {
@@ -292,7 +281,7 @@ impl FusionStage {
                     quality: confidence.as_float(),
                 };
                 
-                let _ = output.emit(reading);
+                let _ = output.push(reading);
                 
                 // Update last fusion time
                 let _ = self.last_fusion.insert(group.name, timestamp);
@@ -338,11 +327,11 @@ impl PipelineStage for FusionStage {
                 }
                 
                 // Pass through original event
-                let _ = output.emit(event);
+                let _ = output.push(event);
             }
             _ => {
                 // Pass through non-sensor events
-                let _ = output.emit(event);
+                let _ = output.push(event);
             }
         }
         

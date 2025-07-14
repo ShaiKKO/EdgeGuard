@@ -165,71 +165,8 @@ impl From<FusionError> for ValidationError {
     }
 }
 
-/// Core trait for sensor fusion algorithms
-/// 
-/// ## Design Rationale
-/// 
-/// This trait provides a generic interface for different fusion algorithms
-/// while maintaining zero-allocation guarantees through const generics:
-/// - `N`: State vector dimension (e.g., [position, velocity, acceleration])
-/// - `M`: Measurement vector dimension (number of sensors)
-/// 
-/// ## Safety Requirements
-/// 
-/// Implementations must:
-/// 1. Never panic on invalid inputs
-/// 2. Detect and handle numerical instabilities
-/// 3. Maintain bounded execution time
-/// 4. Use only stack allocation
-pub trait FusionAlgorithm<const N: usize, const M: usize> {
-    /// Configuration type for the algorithm
-    type Config;
-    
-    /// Create new fusion instance with configuration
-    fn new(config: Self::Config) -> Self;
-    
-    /// Predict next state based on time delta
-    /// 
-    /// This step propagates the state forward in time using the
-    /// system dynamics model. For sensor fusion, this often includes:
-    /// - Drift modeling
-    /// - Environmental effects
-    /// - Known control inputs
-    fn predict(&mut self, dt_ms: u32) -> FusionResult<()>;
-    
-    /// Update state with new measurements
-    /// 
-    /// Incorporates new sensor readings to refine the state estimate.
-    /// Returns the fused estimate and confidence score.
-    /// 
-    /// ## Parameters
-    /// - `measurements`: Array of sensor readings
-    /// - `timestamp`: Measurement timestamp for synchronization
-    /// - `mask`: Optional bit mask for available sensors
-    fn update(
-        &mut self,
-        measurements: &[f32; M],
-        timestamp: Timestamp,
-        mask: Option<u32>,
-    ) -> FusionResult<(f32, ConfidenceScore)>;
-    
-    /// Get current state estimate
-    fn state(&self) -> &[f32; N];
-    
-    /// Get estimation uncertainty (covariance diagonal)
-    fn uncertainty(&self) -> [f32; N];
-    
-    /// Reset fusion to initial state
-    fn reset(&mut self);
-    
-    /// Check if fusion has converged
-    /// 
-    /// Convergence criteria:
-    /// - Uncertainty below threshold
-    /// - Innovation within bounds
-    /// - Sufficient measurements processed
-    fn has_converged(&self) -> bool;
-}
+// Re-export fusion algorithm trait
+pub use crate::traits::FusionAlgorithm;
 
 /// Simplified weighted average fusion
 /// 

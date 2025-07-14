@@ -113,20 +113,10 @@ use alloc::boxed::Box;
 #[cfg(feature = "std")]
 use std::boxed::Box;
 
+use crate::traits::TimeSource;
+
 /// Timestamp in milliseconds since epoch (or device boot for monotonic)
 pub type Timestamp = u64;
-
-/// Source of time for the system
-pub trait TimeSource {
-    /// Get current timestamp in milliseconds
-    fn now(&self) -> Timestamp;
-    
-    /// Check if this source provides wall clock time (vs monotonic)
-    fn is_wall_clock(&self) -> bool;
-    
-    /// Get precision in milliseconds
-    fn precision_ms(&self) -> u32;
-}
 
 /// Monotonic time source using a hardware counter
 /// 

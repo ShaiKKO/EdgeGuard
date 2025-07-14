@@ -1,347 +1,246 @@
-//! Streaming Data Processing Example
+//! Example 10: Streaming Data from Files
 //!
-//! This example demonstrates EdgeGuard's ability to process continuous
-//! streams of sensor data efficiently, combining validation, fusion,
-//! and adaptive processing in a streaming context.
-//!
-//! ## What You'll Learn
-//!
-//! - Processing continuous sensor data streams
-//! - Handling backpressure and flow control
-//! - Adaptive sampling based on data characteristics
-//! - Real-time fusion with streaming data
-//! - Memory-efficient batch processing
-//!
-//! ## Key Concepts
-//!
-//! 1. **Streaming Architecture**: Event-driven processing without buffering entire dataset
-//! 2. **Backpressure**: Automatically slow down when pipeline can't keep up
-//! 3. **Batch Processing**: Process multiple events efficiently
-//! 4. **Adaptive Behavior**: Adjust processing based on data patterns
-//!
-//! ## Running the Example
-//!
-//! ```bash
-//! cargo run --example 10_streaming_data
-//! ```
+//! This example demonstrates how to:
+//! - Read sensor data from CSV and JSON files
+//! - Process streaming data through validation pipeline
+//! - Handle parse errors gracefully
+//! - Collect statistics on data processing
 
+#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(feature = "std"), no_main)]
+
+#[cfg(feature = "std")]
 use edgeguard_core::{
-    events::{Event, SensorType, ValidationStatus, EventBuilder},
-    pipeline::{Pipeline, PipelineStage, StageOutput, PipelineResult, ValidationStage, FilterStage},
-    stream::{Stream, MemoryStream, BatchProcessorWithTime},
-    validators::{TemperatureValidator, HumidityValidator},
-    fusion::pipeline::FusionBuilder,
-    time::{TimeSource, MockTimeSource},
+    events::{Event, SensorType},
+    pipeline::{Pipeline, ValidationStage, AggregationStage, WindowSpec, AggregationMethod},
+    stream::{FileStream, Stream, StreamError, FileFormat},
+    validators::{TemperatureValidator, HumidityValidator, PressureValidator},
 };
 
+#[cfg(feature = "std")]
 fn main() {
-    println!("EdgeGuard Streaming Data Processing Example");
-    println!("==========================================\n");
-
-    // Demonstrate different streaming scenarios
-    memory_stream_demo();
-    println!("\n{}\n", "=".repeat(60));
+    println!("=== EdgeGuard Streaming Data Example ===\n");
     
-    batch_processing_demo();
-    println!("\n{}\n", "=".repeat(60));
+    // Example 1: Process CSV file
+    if let Err(e) = process_csv_file() {
+        println!("CSV processing error: {:?}", e);
+    }
     
-    adaptive_sampling_demo();
+    println!("\n{}\n", "=".repeat(50));
+    
+    // Example 2: Process JSON Lines file
+    if let Err(e) = process_json_file() {
+        println!("JSON processing error: {:?}", e);
+    }
+    
+    println!("\n{}\n", "=".repeat(50));
+    
+    // Example 3: Stream to pipeline with validation
+    if let Err(e) = stream_to_pipeline() {
+        println!("Pipeline processing error: {:?}", e);
+    }
+    
+    println!("\n{}\n", "=".repeat(50));
+    
+    // Example 4: Batch processing with aggregation
+    if let Err(e) = batch_processing() {
+        println!("Batch processing error: {:?}", e);
+    }
 }
 
-fn memory_stream_demo() {
-    println!("Memory Stream Processing:");
-    println!("-----------------------");
-    println!("Processing sensor data from memory with validation\n");
+#[cfg(feature = "std")]
+fn process_csv_file() -> Result<(), StreamError<std::io::Error>> {
+    println!("Example 1: Processing CSV File");
+    println!("------------------------------");
+    
+    // Open CSV file and skip header
+    let mut stream = FileStream::from_csv("examples/data/sensors.csv")?
+        .with_skip_lines(1); // Skip header row
+    
+    let mut event_count = 0;
+    let mut temp_count = 0;
+    let mut humid_count = 0;
+    let mut press_count = 0;
+    
+    // Process all events
+    let _stats = stream.process_all(|event| {
+        event_count += 1;
+        
+        // Count events by sensor type
+        if let Event::SensorReading { sensor_type, value, sensor_id, .. } = &event {
+            match sensor_type {
+                SensorType::Temperature => temp_count += 1,
+                SensorType::Humidity => humid_count += 1,
+                SensorType::Pressure => press_count += 1,
+                _ => {},
+            }
+            
+            // Show first few events
+            if event_count <= 3 {
+                println!("  {} ({}): {:.2}", sensor_id.as_str(), 
+                    match sensor_type {
+                        SensorType::Temperature => "temp",
+                        SensorType::Humidity => "humid",
+                        SensorType::Pressure => "press",
+                        _ => "other",
+                    }, value);
+            }
+        }
+        Ok(())
+    })?;
+    
+    println!("\nCSV Processing Summary:");
+    println!("  Total events: {}", event_count);
+    println!("  Temperature: {}", temp_count);
+    println!("  Humidity: {}", humid_count);
+    println!("  Pressure: {}", press_count);
+    
+    Ok(())
+}
 
-    // Create a pipeline with validation
-    let mut pipeline = Pipeline::<4>::builder()
+#[cfg(feature = "std")]
+fn process_json_file() -> Result<(), StreamError<std::io::Error>> {
+    println!("Example 2: Processing JSON Lines File");
+    println!("------------------------------------");
+    
+    let mut stream = FileStream::new("examples/data/sensors.jsonl", FileFormat::JsonLines)?;
+    
+    let mut event_count = 0;
+    let mut anomaly_count = 0;
+    
+    stream.process_all(|event| {
+        event_count += 1;
+        
+        if let Event::SensorReading { value, sensor_type, sensor_id, .. } = &event {
+            // Check for anomalies
+            let is_anomaly = match sensor_type {
+                SensorType::Temperature => *value < -20.0 || *value > 50.0,
+                SensorType::Humidity => *value < 0.0 || *value > 100.0,
+                SensorType::Pressure => *value < 900.0 || *value > 1100.0,
+                _ => false,
+            };
+            
+            if is_anomaly {
+                anomaly_count += 1;
+                println!("  ANOMALY: {} = {:.2}", sensor_id.as_str(), value);
+            }
+        }
+        Ok(())
+    })?;
+    
+    println!("\nJSON Processing Summary:");
+    println!("  Total events: {}", event_count);
+    println!("  Anomalies detected: {}", anomaly_count);
+    
+    Ok(())
+}
+
+#[cfg(feature = "std")]
+fn stream_to_pipeline() -> Result<(), StreamError<std::io::Error>> {
+    println!("Example 3: Stream to Validation Pipeline");
+    println!("---------------------------------------");
+    
+    // Create validation pipeline
+    let mut pipeline = Pipeline::<16>::builder()
         .add_stage(ValidationStage::new(
-            TemperatureValidator::default(),
-            SensorType::Temperature,
+            TemperatureValidator::indoor(),
+            SensorType::Temperature
         ))
         .add_stage(ValidationStage::new(
-            HumidityValidator::default(), 
-            SensorType::Humidity,
+            HumidityValidator::strict(),
+            SensorType::Humidity
+        ))
+        .add_stage(ValidationStage::new(
+            PressureValidator::new_with_altitude(0.0), // Sea level
+            SensorType::Pressure
         ))
         .build();
-
-    // Generate sensor events
-    let events = generate_sensor_events();
-    println!("Generated {} sensor events", events.len());
-
-    // Create memory stream
-    let mut stream = MemoryStream::new(&events);
     
-    // Process stream through pipeline using poll_next
-    let mut processed = 0;
-    let mut validated = 0;
+    // Stream CSV data
+    let mut stream = FileStream::from_csv("examples/data/sensors.csv")?
+        .with_skip_lines(1);
     
-    println!("\nProcessing events using stream poll...");
-    println!("Time    | Event Type        | Sensor ID | Value  | Status");
-    println!("--------|-------------------|-----------|--------|--------");
+    // Process through pipeline
+    stream.process_all(|event| {
+        pipeline.push_event(event.clone());
+        Ok(())
+    })?;
     
-    // Process events one by one
-    loop {
-        match stream.poll_next() {
-            Ok(event) => {
-                // Push to pipeline
-                pipeline.push_event(event.clone());
-                
-                // Process
-                let _ = pipeline.process_batch(1).unwrap();
-                
-                // Collect results
-                while let Some(out_event) = pipeline.pop_result() {
-                    match &out_event {
-                        Event::ValidationResult { timestamp, sensor_id, status, .. } => {
-                            if processed < 10 { // Only print first few for brevity
-                                println!("{:7} | ValidationResult  | {:9} | -      | {:?}",
-                                         timestamp % 10000, sensor_id.as_str(), status);
-                            }
-                            if matches!(status, ValidationStatus::Valid) {
-                                validated += 1;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                processed += 1;
+    // Process pipeline events
+    let _ = pipeline.process_batch(100);
+    
+    // Collect validation results
+    let mut valid_count = 0;
+    let mut invalid_count = 0;
+    
+    while let Some(result) = pipeline.pop_result() {
+        if let Event::ValidationResult { status, sensor_id, .. } = result {
+            if matches!(status, edgeguard_core::events::ValidationStatus::Valid) {
+                valid_count += 1;
+            } else {
+                invalid_count += 1;
+                println!("  Invalid: {} - {:?}", sensor_id.as_str(), status);
             }
-            Err(nb::Error::Other(_)) => break, // End of stream
-            Err(nb::Error::WouldBlock) => continue, // Would block, try again
         }
     }
     
-    println!("\nProcessing Summary:");
-    println!("- Total events processed: {}", processed);
-    println!("- Valid measurements: {}", validated);
+    println!("\nValidation Summary:");
+    println!("  Valid readings: {}", valid_count);
+    println!("  Invalid readings: {}", invalid_count);
+    
+    Ok(())
 }
 
-fn batch_processing_demo() {
-    println!("Batch Processing:");
-    println!("----------------");
-    println!("Demonstrating efficient batch processing\n");
-
-    // Create filter pipeline
-    let mut pipeline = Pipeline::<4>::builder()
-        .add_stage(FilterStage::new(
-            |event| match event {
-                Event::SensorReading { quality, .. } => *quality > 0.9,
-                _ => true,
-            },
-            "QualityFilter",
+#[cfg(feature = "std")]
+fn batch_processing() -> Result<(), StreamError<std::io::Error>> {
+    println!("Example 4: Batch Processing with Aggregation");
+    println!("-------------------------------------------");
+    
+    // Create aggregation pipeline
+    let mut pipeline = Pipeline::<16>::builder()
+        .add_stage(AggregationStage::new(
+            WindowSpec::Time { duration_ms: 60000 }, // 1 minute windows
+            AggregationMethod::Mean,
+            SensorType::Temperature
         ))
         .build();
-
-    // Generate a larger dataset
-    let mut events = Vec::new();
-    for i in 0..1000 {
-        events.push(EventBuilder::new((i * 10) as u64)
-            .sensor("sensor1", SensorType::Temperature)
-            .reading(20.0 + (i as f32 * 0.01), 0.85 + (i as f32 * 0.0001))
-            .unwrap());
-    }
     
-    let mut stream = MemoryStream::new(&events);
-    let time_source = MockTimeSource::new(0);
+    let mut stream = FileStream::from_csv("examples/data/sensors.csv")?
+        .with_skip_lines(1);
     
-    println!("Processing {} events in batches...", events.len());
+    let mut batch_count = 0;
     
     // Process in batches
-    let start = time_source.now();
-    let mut total_processed = 0;
-    let mut total_passed = 0;
-    
-    let _ = stream.process_batch_timed::<_, 100>(
-        1000,  // process up to 1000 events
-        5000,  // 5 second timeout
-        &time_source,
-        |batch| {
-            // Process batch through pipeline
-            for event in batch {
-                pipeline.push_event(event.clone());
-            }
-            
-            let processed = pipeline.process_batch(batch.len()).unwrap();
-            total_processed += processed;
-            
-            // Count output
-            while let Some(_) = pipeline.pop_result() {
-                total_passed += 1;
-            }
-            
-            // Show progress
-            if total_processed % 200 == 0 {
-                println!("Processed {} events, {} passed filter", total_processed, total_passed);
+    stream.process_batch(10, |batch| {
+        println!("  Processing batch of {} events", batch.len());
+        
+        for event in batch {
+            pipeline.push_event(event.clone());
+        }
+        
+        // Process any events in the pipeline (ignore pipeline errors)
+        let _ = pipeline.process_batch(20);
+        
+        // Check for aggregated results
+        while let Some(result) = pipeline.pop_result() {
+            if let Event::BatchReading { mean_value, count, sensor_type, .. } = result {
+                if matches!(sensor_type, SensorType::Temperature) {
+                    println!("    Aggregated: {} readings, mean = {:.2}°C", count, mean_value);
+                }
             }
         }
-    );
+        
+        batch_count += 1;
+        Ok(())
+    })?;
     
-    let elapsed = time_source.now() - start;
-    println!("\nBatch processing complete:");
-    println!("- Total events: {}", total_processed);
-    println!("- Events passed filter: {} ({:.1}%)", 
-             total_passed, 
-             (total_passed as f32 / total_processed as f32) * 100.0);
-    println!("- Processing time: {}ms", elapsed);
+    println!("\nBatch Processing Summary:");
+    println!("  Total batches processed: {}", batch_count);
+    
+    Ok(())
 }
 
-fn adaptive_sampling_demo() {
-    println!("Adaptive Sampling:");
-    println!("-----------------");
-    println!("Demonstrating adaptive sampling based on data characteristics\n");
-
-    // Simple adaptive sampler
-    struct AdaptiveSampler {
-        last_value: Option<f32>,
-        sample_count: u32,
-        skip_count: u32,
-    }
-    
-    impl AdaptiveSampler {
-        fn new() -> Self {
-            Self {
-                last_value: None,
-                sample_count: 0,
-                skip_count: 0,
-            }
-        }
-        
-        fn should_sample(&mut self, event: &Event) -> bool {
-            if let Event::SensorReading { value, .. } = event {
-                if let Some(last) = self.last_value {
-                    let change = (value - last).abs();
-                    
-                    // Sample more frequently when changes are large
-                    let should_sample = if change > 1.0 {
-                        true // Always sample large changes
-                    } else if change > 0.1 {
-                        self.skip_count % 2 == 0 // Sample every other for moderate changes
-                    } else {
-                        self.skip_count % 10 == 0 // Sample 1 in 10 for small changes
-                    };
-                    
-                    if should_sample {
-                        self.last_value = Some(*value);
-                        self.sample_count += 1;
-                    }
-                    self.skip_count += 1;
-                    
-                    should_sample
-                } else {
-                    // First sample
-                    self.last_value = Some(*value);
-                    self.sample_count = 1;
-                    true
-                }
-            } else {
-                true // Pass through non-sensor events
-            }
-        }
-    }
-    
-    // Generate events with varying dynamics
-    let mut events = Vec::new();
-    
-    // Period 1: Stable (small changes)
-    for i in 0..100 {
-        events.push(EventBuilder::new((i * 10) as u64)
-            .sensor("temp1", SensorType::Temperature)
-            .reading(25.0 + (i as f32 * 0.01), 0.95)
-            .unwrap());
-    }
-    
-    // Period 2: Rapid change
-    for i in 0..100 {
-        events.push(EventBuilder::new((1000 + i * 10) as u64)
-            .sensor("temp1", SensorType::Temperature)
-            .reading(26.0 + (i as f32 * 0.5), 0.95)
-            .unwrap());
-    }
-    
-    // Period 3: Stable again
-    for i in 0..100 {
-        events.push(EventBuilder::new((2000 + i * 10) as u64)
-            .sensor("temp1", SensorType::Temperature)
-            .reading(75.0 + (i as f32 * 0.01), 0.95)
-            .unwrap());
-    }
-    
-    // Process with adaptive sampling
-    let mut sampler = AdaptiveSampler::new();
-    let mut stream = MemoryStream::new(&events);
-    let mut total = 0;
-    
-    println!("Period    | Total | Sampled | Reduction");
-    println!("----------|-------|---------|----------");
-    
-    // Process each period
-    for period in 0..3 {
-        let period_name = match period {
-            0 => "Stable 1  ",
-            1 => "Rapid     ",
-            2 => "Stable 2  ",
-            _ => unreachable!(),
-        };
-        
-        let start_samples = sampler.sample_count;
-        let mut period_count = 0;
-        
-        // Process 100 events per period
-        for _ in 0..100 {
-            match stream.poll_next() {
-                Ok(event) => {
-                    total += 1;
-                    period_count += 1;
-                    sampler.should_sample(&event);
-                }
-                Err(_) => break,
-            }
-        }
-        
-        let period_samples = sampler.sample_count - start_samples;
-        let reduction = 100.0 - (period_samples as f32 / period_count as f32 * 100.0);
-        
-        println!("{} | {:5} | {:7} | {:8.1}%",
-                 period_name, period_count, period_samples, reduction);
-    }
-    
-    println!("\nAdaptive Sampling Results:");
-    println!("- Total events: {}", total);
-    println!("- Sampled events: {}", sampler.sample_count);
-    println!("- Overall reduction: {:.1}%", 
-             100.0 - (sampler.sample_count as f32 / total as f32 * 100.0));
-    
-    // Summary
-    println!("\n\nStreaming Processing Benefits:");
-    println!("============================");
-    println!("✓ Memory efficient - process unlimited data");
-    println!("✓ Low latency - events processed as they arrive");
-    println!("✓ Adaptive - adjust to data characteristics");
-    println!("✓ Batch processing - efficient for high throughput");
-    println!("✓ Composable - combine with validation and fusion");
-}
-
-// Helper functions
-
-fn generate_sensor_events() -> Vec<Event> {
-    let mut events = Vec::new();
-    
-    for i in 0..30 {
-        let time = (1000 + i * 100) as u64;
-        
-        // Temperature sensors
-        events.push(EventBuilder::new(time)
-            .sensor("temp1", SensorType::Temperature)
-            .reading(25.0 + (i as f32 * 0.1), 0.95)
-            .unwrap());
-            
-        // Humidity sensor
-        events.push(EventBuilder::new(time)
-            .sensor("hum1", SensorType::Humidity)
-            .reading(50.0 + (i as f32 * 0.5), 0.9)
-            .unwrap());
-    }
-    
-    events
+#[cfg(not(feature = "std"))]
+fn main() {
+    // No-std placeholder
 }

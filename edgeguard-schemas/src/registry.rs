@@ -248,8 +248,9 @@ impl Default for SchemaRegistry {
     }
 }
 
-/// Global registry instance (optional pattern)
+// Global registry instance (optional pattern)
 lazy_static::lazy_static! {
+    /// Global schema registry with default schemas loaded
     pub static ref GLOBAL_REGISTRY: SchemaRegistry = {
         let registry = SchemaRegistry::new();
         // Ignore errors in static initialization

@@ -139,22 +139,9 @@ pub fn calculate_rate_from_readings(
     calculate_rate(current_value, last_reading.value, time_delta)
 }
 
-/// Check if value represents a valid sensor reading
-pub trait Validatable {
-    fn is_valid(&self) -> bool;
-}
-
-impl Validatable for f32 {
-    fn is_valid(&self) -> bool {
-        !self.is_nan() && !self.is_infinite()
-    }
-}
-
-impl Validatable for f64 {
-    fn is_valid(&self) -> bool {
-        !self.is_nan() && !self.is_infinite()
-    }
-}
+// Import Validatable trait from traits module for f32.is_valid() extension
+#[allow(unused_imports)]
+use crate::traits::Validatable;
 
 #[cfg(test)]
 mod tests {

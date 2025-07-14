@@ -239,20 +239,21 @@ impl HumidityValidator {
 
 impl Validator for HumidityValidator {
     type Value = f32;
+    type Error = ValidationError;
     
-    fn validate(&self, value: Self::Value, context: &ValidationContext) -> ValidationResult<()> {
+    fn validate(&self, value: &Self::Value, context: &ValidationContext) -> ValidationResult<()> {
         // Check for valid number
-        if !value.is_valid() {
+        if !(*value).is_valid() {
             return Err(ValidationError::InvalidValue);
         }
         
         // Basic range check
-        utils::check_range(value, self.min_percent, self.max_percent)?;
+        utils::check_range(*value, self.min_percent, self.max_percent)?;
         
         // Rate of change check
         if let Some(last_reading) = utils::last_reading(&context.history) {
             let rate = utils::calculate_rate_from_readings(
-                value,
+                *value,
                 context.timestamp,
                 last_reading,
             );
@@ -267,7 +268,7 @@ impl Validator for HumidityValidator {
         
         // Cross-validation with temperature if available
         if let Some(temp) = context.ambient_temp {
-            self.validate_with_temperature(value, temp)?;
+            self.validate_with_temperature(*value, temp)?;
         }
         
         // Sensor quality check

@@ -90,7 +90,7 @@ pub const MAX_INLINE_ID: usize = 15;
 /// Sensor type enumeration
 /// 
 /// Maps to specific validators and physical constraints
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum SensorType {
     Temperature = 0,

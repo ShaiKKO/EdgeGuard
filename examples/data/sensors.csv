@@ -1,0 +1,61 @@
+# Sample sensor data for EdgeGuard
+# Format: timestamp,sensor_id,sensor_type,value,confidence
+# timestamp: Unix timestamp in seconds
+# sensor_id: Unique sensor identifier
+# sensor_type: temperature, humidity, pressure
+# value: Sensor reading
+# confidence: 0.0-1.0 quality indicator
+
+# Header row (will be skipped if skip_lines is set)
+timestamp,sensor_id,type,value,confidence
+
+# Normal temperature readings
+1704067200,temp_01,temperature,22.5,0.95
+1704067260,temp_01,temperature,22.6,0.95
+1704067320,temp_01,temperature,22.7,0.94
+1704067380,temp_01,temperature,22.8,0.95
+1704067440,temp_01,temperature,23.0,0.96
+
+# Humidity sensor data
+1704067200,humid_01,humidity,45.2,0.92
+1704067260,humid_01,humidity,45.5,0.93
+1704067320,humid_01,humidity,46.0,0.91
+1704067380,humid_01,humidity,46.2,0.92
+1704067440,humid_01,humidity,46.5,0.93
+
+# Pressure sensor
+1704067200,press_01,pressure,1013.2,0.98
+1704067260,press_01,pressure,1013.1,0.97
+1704067320,press_01,pressure,1013.0,0.98
+1704067380,press_01,pressure,1012.9,0.98
+1704067440,press_01,pressure,1012.8,0.97
+
+# Multiple temperature sensors
+1704067500,temp_02,temperature,21.8,0.94
+1704067500,temp_03,temperature,23.2,0.93
+1704067560,temp_02,temperature,21.9,0.94
+1704067560,temp_03,temperature,23.3,0.92
+
+# Anomalous readings for testing validation
+1704067620,temp_01,temperature,150.0,0.95  # Too high
+1704067680,temp_01,temperature,-100.0,0.94 # Too low
+1704067740,temp_01,temperature,23.5,0.95   # Normal after anomaly
+1704067800,temp_01,temperature,50.0,0.96   # Rapid change - should fail rate limit
+
+# Low confidence readings
+1704067860,humid_01,humidity,47.0,0.3
+1704067920,humid_01,humidity,47.5,0.2
+1704067980,humid_01,humidity,48.0,0.95
+
+# Missing confidence (should default to 1.0)
+1704068040,temp_01,temperature,24.0
+1704068100,temp_01,temperature,24.1
+
+# Different formatting (with quotes)
+1704068160,"temp_01","temperature",24.2,0.95
+1704068220,"humid_01","humidity",49.0,0.94
+
+# Mixed case sensor types
+1704068280,temp_01,Temperature,24.3,0.95
+1704068340,humid_01,HUMIDITY,49.5,0.93
+1704068400,press_01,Pressure,1012.7,0.98

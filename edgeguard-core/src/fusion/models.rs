@@ -79,46 +79,8 @@ use crate::{
     fusion::confidence::{ConfidenceScore, ConfidenceFactors},
 };
 
-/// Generic sensor model trait
-/// 
-/// Defines the interface for sensor-specific physics models
-/// used in fusion algorithms.
-pub trait SensorModel: Send {
-    /// Sensor type this model represents
-    fn sensor_type(&self) -> SensorType;
-    
-    /// Sensor identifier
-    fn sensor_id(&self) -> &str;
-    
-    /// Get measurement noise variance
-    fn noise_variance(&self) -> f32;
-    
-    /// State transition function
-    /// 
-    /// Predicts how the state evolves over time based on physics
-    fn predict_state(&self, current_state: f32, dt_ms: u32) -> f32;
-    
-    /// Measurement model
-    /// 
-    /// Maps true state to expected sensor reading
-    fn measurement_model(&self, true_state: f32) -> f32;
-    
-    /// Validate measurement against physical constraints
-    fn validate(&self, measurement: f32) -> Result<(), ValidationError>;
-    
-    /// Environmental compensation
-    /// 
-    /// Corrects measurement based on environmental conditions
-    fn compensate(&self, measurement: f32, env: &EnvironmentalConditions) -> f32;
-    
-    /// Compute confidence factors for this measurement
-    fn confidence_factors(
-        &self,
-        measurement: f32,
-        prediction: f32,
-        env: &EnvironmentalConditions,
-    ) -> ConfidenceFactors;
-}
+// Re-export sensor model trait
+pub use crate::traits::SensorModel;
 
 /// Environmental conditions for compensation
 #[derive(Debug, Clone, Copy)]
@@ -256,7 +218,7 @@ impl SensorModel for TemperatureModel {
         Ok(())
     }
     
-    fn compensate(&self, measurement: f32, _env: &EnvironmentalConditions) -> f32 {
+    fn compensate(&self, measurement: f32, _env: &dyn core::any::Any) -> f32 {
         // Temperature sensors typically don't need environmental compensation
         // Just remove self-heating if known
         measurement - self.self_heating
@@ -266,8 +228,8 @@ impl SensorModel for TemperatureModel {
         &self,
         measurement: f32,
         prediction: f32,
-        _env: &EnvironmentalConditions,
-    ) -> ConfidenceFactors {
+        _env: &dyn core::any::Any,
+    ) -> f32 {
         let mut factors = ConfidenceFactors::moderate();
         
         // Statistical confidence from prediction error
@@ -294,7 +256,14 @@ impl SensorModel for TemperatureModel {
         // Cross-validation placeholder (would check against other temperature sensors)
         factors.cross_validation = ConfidenceScore::from_float(0.8);
         
-        factors
+        // Return combined confidence as a single float
+        // Use the minimum confidence from all factors as the overall confidence
+        let overall = factors.statistical.as_float()
+            .min(factors.environmental.as_float())
+            .min(factors.reliability.as_float())
+            .min(factors.temporal.as_float())
+            .min(factors.cross_validation.as_float());
+        overall
     }
 }
 
@@ -395,58 +364,67 @@ impl SensorModel for PressureModel {
         Ok(())
     }
     
-    fn compensate(&self, measurement: f32, env: &EnvironmentalConditions) -> f32 {
-        // Temperature compensation
-        let temp_correction = self.temp_coefficient * (env.temperature - 20.0);
-        
-        // Altitude compensation using barometric formula
-        // P = P0 * (1 - 0.0065*h/T0)^5.255
-        let altitude_diff = env.altitude - self.reference_altitude;
-        let base = 1.0 - 0.0065 * altitude_diff / 288.15;
-        
-        // Approximate pow(base, 5.255) using exp(5.255 * ln(base))
-        // For base close to 1, ln(base) ≈ base - 1
-        // So pow(base, 5.255) ≈ exp(5.255 * (base - 1))
-        let exponent = 5.255 * (base - 1.0);
-        let altitude_factor = if exponent.abs() < 0.5 {
-            // Taylor expansion of exp(x)
-            1.0 + exponent + exponent * exponent * 0.5
-        } else {
-            // For larger values, use simpler approximation
-            if exponent > 0.0 {
-                1.0 + exponent * (1.0 + 0.5 * exponent)
+    fn compensate(&self, measurement: f32, env: &dyn core::any::Any) -> f32 {
+        // Try to downcast to EnvironmentalConditions
+        if let Some(env_cond) = env.downcast_ref::<EnvironmentalConditions>() {
+            // Temperature compensation
+            let temp_correction = self.temp_coefficient * (env_cond.temperature - 20.0);
+            
+            // Altitude compensation using barometric formula
+            // P = P0 * (1 - 0.0065*h/T0)^5.255
+            let altitude_diff = env_cond.altitude - self.reference_altitude;
+            let base = 1.0 - 0.0065 * altitude_diff / 288.15;
+            
+            // Approximate pow(base, 5.255) using exp(5.255 * ln(base))
+            // For base close to 1, ln(base) ≈ base - 1
+            // So pow(base, 5.255) ≈ exp(5.255 * (base - 1))
+            let exponent = 5.255 * (base - 1.0);
+            let altitude_factor = if exponent.abs() < 0.5 {
+                // Taylor expansion of exp(x)
+                1.0 + exponent + exponent * exponent * 0.5
             } else {
-                1.0 / (1.0 - exponent * (1.0 - 0.5 * exponent))
-            }
-        };
-        
-        (measurement + temp_correction) / altitude_factor
+                // For larger values, use simpler approximation
+                if exponent > 0.0 {
+                    1.0 + exponent * (1.0 + 0.5 * exponent)
+                } else {
+                    1.0 / (1.0 - exponent * (1.0 - 0.5 * exponent))
+                }
+            };
+            
+            (measurement + temp_correction) / altitude_factor
+        } else {
+            // No compensation if we can't get environmental conditions
+            measurement
+        }
     }
     
     fn confidence_factors(
         &self,
         measurement: f32,
         prediction: f32,
-        env: &EnvironmentalConditions,
-    ) -> ConfidenceFactors {
-        let mut factors = ConfidenceFactors::moderate();
-        
+        env: &dyn core::any::Any,
+    ) -> f32 {
         // Statistical confidence
         let error = (measurement - prediction).abs();
         let normalized_error = error / self.noise_std;
-        factors.statistical = ConfidenceScore::from_float((1.0 - normalized_error * 0.1).max(0.2));
+        let statistical_confidence = (1.0 - normalized_error * 0.1).max(0.2);
         
         // Environmental confidence based on altitude
-        let altitude_confidence = if env.altitude < 3000.0 {
-            1.0 // Normal operating altitude
-        } else if env.altitude < 5000.0 {
-            0.7 // High altitude, less accurate
+        let altitude_confidence = if let Some(env_cond) = env.downcast_ref::<EnvironmentalConditions>() {
+            if env_cond.altitude < 3000.0 {
+                1.0 // Normal operating altitude
+            } else if env_cond.altitude < 5000.0 {
+                0.7 // High altitude, less accurate
+            } else {
+                0.4 // Very high altitude
+            }
         } else {
-            0.4 // Very high altitude
+            // Default moderate confidence if no environmental data
+            0.8
         };
-        factors.environmental = ConfidenceScore::from_float(altitude_confidence);
         
-        factors
+        // Return minimum of the two confidence factors
+        statistical_confidence.min(altitude_confidence)
     }
 }
 
@@ -534,7 +512,7 @@ impl SensorModel for HumidityModel {
         Ok(())
     }
     
-    fn compensate(&self, measurement: f32, _env: &EnvironmentalConditions) -> f32 {
+    fn compensate(&self, measurement: f32, _env: &dyn core::any::Any) -> f32 {
         // Humidity sensors typically provide temperature-compensated readings
         // Just ensure physical constraints
         measurement.max(0.0).min(100.0)
@@ -544,8 +522,8 @@ impl SensorModel for HumidityModel {
         &self,
         measurement: f32,
         prediction: f32,
-        env: &EnvironmentalConditions,
-    ) -> ConfidenceFactors {
+        env: &dyn core::any::Any,
+    ) -> f32 {
         let mut factors = ConfidenceFactors::moderate();
         
         // Statistical confidence
@@ -555,12 +533,17 @@ impl SensorModel for HumidityModel {
         
         // Environmental confidence based on temperature
         // Humidity sensors less accurate at temperature extremes
-        let temp_confidence = if env.temperature > 0.0 && env.temperature < 50.0 {
-            1.0
-        } else if env.temperature > -20.0 && env.temperature < 70.0 {
-            0.7
+        let temp_confidence = if let Some(env_cond) = env.downcast_ref::<EnvironmentalConditions>() {
+            if env_cond.temperature > 0.0 && env_cond.temperature < 50.0 {
+                1.0
+            } else if env_cond.temperature > -20.0 && env_cond.temperature < 70.0 {
+                0.7
+            } else {
+                0.4
+            }
         } else {
-            0.4
+            // Default moderate confidence if no environmental data
+            0.8
         };
         factors.environmental = ConfidenceScore::from_float(temp_confidence);
         
@@ -568,7 +551,11 @@ impl SensorModel for HumidityModel {
         let dew_point_valid = measurement <= 100.0; // Simplified check
         factors.cross_validation = ConfidenceScore::from_float(if dew_point_valid { 0.9 } else { 0.3 });
         
-        factors
+        // Return combined confidence as a single float
+        let overall = factors.statistical.as_float()
+            .min(factors.environmental.as_float())
+            .min(factors.cross_validation.as_float());
+        overall
     }
 }
 

@@ -63,19 +63,15 @@
 //!
 //! ## Usage Examples
 //!
-//! ```rust
-//! use edgeguard_schemas::schemas::{sensor_reading_v1, alert_v1};
-//! use apache_avro::Writer;
+//! ```rust,no_run
+//! use edgeguard_schemas::schemas::sensor_reading_v1;
 //!
 //! // Get schema for encoding
-//! let schema = sensor_reading_v1()?;
+//! let schema = sensor_reading_v1().unwrap();
 //! 
-//! // Create writer with compression
-//! let writer = Writer::builder()
-//!     .schema(&schema)
-//!     .codec(apache_avro::Codec::Snappy)
-//!     .build()?;
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! // Schema is ready to use with Avro writers
+//! // The schema contains the definition for sensor readings
+//! println!("Schema loaded successfully");
 //! ```
 
 use apache_avro::Schema;

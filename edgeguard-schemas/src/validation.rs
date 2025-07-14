@@ -4,14 +4,13 @@
 //! with embedded physics constraints to validate sensor data.
 
 use apache_avro::{Schema, types::Value};
-use serde_json::Value as JsonValue;
 
-use crate::{SchemaError, physics::{SensorConstraints, CrossValidationType}};
+use crate::{SchemaError, physics::SensorConstraints};
 
 /// Schema validator that combines Avro validation with physics constraints
 pub struct SchemaValidator {
     /// The Avro schema for structural validation
-    schema: Schema,
+    _schema: Schema,
     
     /// Physics constraints for value validation
     constraints: Option<SensorConstraints>,
@@ -27,7 +26,7 @@ impl SchemaValidator {
         let constraints = crate::physics::extract_from_schema(&schema);
         
         Self {
-            schema,
+            _schema: schema,
             constraints,
             enable_cross_validation: true,
         }
@@ -36,7 +35,7 @@ impl SchemaValidator {
     /// Create validator with explicit constraints
     pub fn with_constraints(schema: Schema, constraints: SensorConstraints) -> Self {
         Self {
-            schema,
+            _schema: schema,
             constraints: Some(constraints),
             enable_cross_validation: true,
         }
@@ -74,28 +73,45 @@ impl SchemaValidator {
         value: &Value,
         report: &mut ValidationReport,
     ) -> Result<(), SchemaError> {
-        // Apache Avro should provide schema validation
-        // For now, we do basic type checking
-        // Apache Avro's Schema enum structure may vary by version
-        // For now, do basic validation
+        // For now, we do basic validation for records
+        // Full Avro schema validation would require traversing the schema tree
         match value {
             Value::Record(fields) => {
                 // Basic check that we have a record
                 if fields.is_empty() {
-                    report.add_warning(ValidationIssue {
+                    report.add_error(ValidationIssue {
                         issue_type: IssueType::MissingField,
                         field: None,
                         message: "Record has no fields".to_string(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                     });
+                }
+                
+                // Check for required fields based on common sensor reading fields
+                let field_map: std::collections::HashMap<_, _> = fields
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v))
+                    .collect();
+                
+                // Check required fields for sensor readings
+                let required_fields = ["sensor_id", "timestamp", "value", "unit"];
+                for field_name in &required_fields {
+                    if !field_map.contains_key(field_name) {
+                        report.add_error(ValidationIssue {
+                            issue_type: IssueType::MissingField,
+                            field: Some(field_name.to_string()),
+                            message: format!("Required field '{}' is missing", field_name),
+                            severity: Severity::Error,
+                        });
+                    }
                 }
             }
             _ => {
-                report.add_warning(ValidationIssue {
+                report.add_error(ValidationIssue {
                     issue_type: IssueType::TypeMismatch,
                     field: None,
                     message: "Expected record type".to_string(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                 });
             }
         }

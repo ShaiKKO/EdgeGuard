@@ -21,17 +21,40 @@ thiserror-no-std = { workspace = true }
 nb = { workspace = true }
 
 [features]
-default = ["std"]
+default = ["std", "stream-memory"]
 std = ["serde", "log", "thiserror-no-std/std"]
-embedded = ["defmt", "fixed"]
+embedded = ["defmt", "fixed", "stream-memory"]
 alloc = ["serde/alloc"]
 low_memory_tables = []
 high_precision_tables = []
 schemas = []
 
+# Stream features
+stream-memory = []
+stream-file = ["std"]
+stream-adapters = []
+stream-rate-limit = ["stream-adapters"]
+stream-batch = ["stream-adapters"]
+stream-backpressure = ["stream-adapters"]
+stream-combined = ["stream-adapters"]
+
+# Pipeline features  
+pipeline-core = []
+pipeline-stages = ["pipeline-core"]
+pipeline-stream = ["pipeline-core", "stream-memory"]
+pipeline-validation = ["pipeline-stages"]
+pipeline-aggregation = ["pipeline-stages"]
+pipeline-routing = ["pipeline-stages"]
+pipeline-all = ["pipeline-stages", "pipeline-stream"]
+
+# Platform presets
+esp32 = ["embedded", "stream-memory", "pipeline-core", "pipeline-validation"]
+raspberry-pi = ["std", "stream-file", "pipeline-all"]
+
 [dev-dependencies]
 proptest = { workspace = true }
 criterion = { workspace = true }
+tempfile = "3.8"
 
 # [[bench]]
 # name = "validation"

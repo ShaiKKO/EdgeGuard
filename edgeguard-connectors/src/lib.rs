@@ -152,6 +152,34 @@ pub mod mqtt;
 #[cfg(feature = "coap")]
 pub mod coap;
 
+#[cfg(feature = "http")]
+pub mod http;
+
+// Re-export common types
+#[cfg(feature = "mqtt")]
+pub use mqtt::{MqttConnector, MqttConfig, MqttError, QoS};
+
+use thiserror::Error;
+
+/// Common connector errors
+#[derive(Debug, Error)]
+pub enum ConnectorError {
+    #[error("Not connected")]
+    NotConnected,
+    
+    #[error("Buffer full")]
+    BufferFull,
+    
+    #[error("Timeout")]
+    Timeout,
+    
+    #[error("Protocol error: {0}")]
+    ProtocolError(String),
+    
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
+}
+
 /// Trait for all protocol connectors
 pub trait Connector {
     type Error;
@@ -161,4 +189,37 @@ pub trait Connector {
     
     /// Check if connected
     fn is_connected(&self) -> bool;
+}
+
+/// Async version of the Connector trait
+/// 
+/// This is the preferred trait for new implementations
+#[cfg(feature = "std")]
+#[async_trait::async_trait]
+pub trait AsyncConnector: Send {
+    type Error;
+    
+    /// Send sensor data asynchronously
+    async fn send(&mut self, topic: &str, data: &[u8]) -> Result<(), Self::Error>;
+    
+    /// Check if connected
+    fn is_connected(&self) -> bool;
+    
+    /// Get connection statistics
+    fn stats(&self) -> ConnectionStats;
+}
+
+/// Connection statistics common to all connectors
+#[derive(Debug, Default, Clone)]
+pub struct ConnectionStats {
+    /// Total messages sent successfully
+    pub messages_sent: u64,
+    /// Total messages failed to send
+    pub messages_failed: u64,
+    /// Total bytes sent
+    pub bytes_sent: u64,
+    /// Number of reconnections
+    pub reconnections: u32,
+    /// Last error message
+    pub last_error: Option<String>,
 }

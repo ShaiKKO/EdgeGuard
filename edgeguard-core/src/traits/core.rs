@@ -1,14 +1,7 @@
-//! Core Traits and Abstractions for Physics-Based Validation
+//! Core Validation Traits and Types
 //!
-//! ## Design Philosophy
-//!
-//! EdgeGuard uses a trait-based architecture to provide flexibility while maintaining
-//! zero-cost abstractions. The trait system allows:
-//!
-//! - **Pluggable Validators**: Add new sensor types without modifying core code
-//! - **Static Dispatch**: No runtime overhead from dynamic dispatch
-//! - **Compile-Time Optimization**: Monomorphization eliminates unused code
-//! - **Type Safety**: Catch configuration errors at compile time
+//! This module contains the fundamental validation traits that form the basis
+//! of EdgeGuard's physics-based validation system.
 //!
 //! ## Trait Hierarchy
 //!
@@ -39,50 +32,6 @@
 //! ├── sensor_quality: f32 = 4 bytes
 //! └── padding = 4 bytes
 //! ```
-//!
-//! Adjust `MAX_HISTORY_SIZE` based on your RAM budget and validation needs.
-//!
-//! ## Usage Pattern
-//!
-//! The typical validation flow:
-//!
-//! ```rust
-//! use edgeguard_core::{Validator, TemperatureValidator, ValidationContext};
-//!
-//! // 1. Create validator with physics constraints
-//! let validator = TemperatureValidator::new_with_limits(-40.0, 125.0, 5.0);
-//!
-//! // 2. Build context with history and environment
-//! let mut ctx = ValidationContext::default();
-//! ctx.add_reading(20.0, 1000);
-//! ctx.add_reading(20.5, 2000);
-//! ctx.timestamp = 3000;
-//! ctx.sensor_quality = 0.95;
-//!
-//! // 3. Validate new reading
-//! match validator.validate(21.0, &ctx) {
-//!     Ok(()) => {
-//!         // Reading passed all physics checks
-//!         ctx.add_reading(21.0, ctx.timestamp);
-//!     }
-//!     Err(e) => {
-//!         // Handle validation failure
-//!         println!("Rejected: {:?}", e);
-//!     }
-//! }
-//! ```
-//!
-//! ## Extension Points
-//!
-//! To add a new sensor type:
-//!
-//! 1. Define a struct for your validator
-//! 2. Implement the `Validator` trait
-//! 3. Optionally implement `CrossValidator` for multi-sensor checks
-//! 4. Optionally implement `EnvironmentalCompensation` for corrections
-//!
-//! The trait system ensures your validator integrates seamlessly with the
-//! existing infrastructure.
 
 use crate::errors::ValidationResult;
 use crate::time::Timestamp;
@@ -224,7 +173,8 @@ impl ValidationContext {
 /// ## Example Implementation
 /// 
 /// ```rust
-/// use edgeguard_core::{Validator, ValidationContext, ValidationResult, ValidatorConstraints};
+/// use edgeguard_core::traits::{Validator, ValidationContext, ValidatorConstraints};
+/// use edgeguard_core::errors::{ValidationResult, ValidationError};
 /// 
 /// struct AirQualityValidator {
 ///     max_pm25: f32,
@@ -233,12 +183,13 @@ impl ValidationContext {
 /// 
 /// impl Validator for AirQualityValidator {
 ///     type Value = f32;
+///     type Error = ValidationError;
 ///     
-///     fn validate(&self, value: f32, context: &ValidationContext) -> ValidationResult<()> {
+///     fn validate(&self, value: &f32, context: &ValidationContext) -> ValidationResult<()> {
 ///         // Check physical limits
-///         if value < 0.0 || value > self.max_pm25 {
+///         if *value < 0.0 || *value > self.max_pm25 {
 ///             return Err(ValidationError::OutOfRange {
-///                 value,
+///                 value: *value,
 ///                 min: 0.0,
 ///                 max: self.max_pm25,
 ///             });
@@ -260,20 +211,29 @@ impl ValidationContext {
 ///     }
 /// }
 /// ```
-pub trait Validator {
+pub trait Validator: Send {
     /// The type of value this validator handles
     type Value;
+    /// The error type returned on validation failure
+    type Error;
     
     /// Validate a single reading against physics constraints
     /// 
     /// Returns Ok(()) if the reading is plausible, or an error describing
     /// why the reading was rejected.
-    fn validate(&self, value: Self::Value, context: &ValidationContext) -> ValidationResult<()>;
+    fn validate(&self, value: &Self::Value, context: &ValidationContext) -> Result<(), Self::Error>;
+    
+    /// Validate with a mutable context (allows updating history)
+    fn validate_with_context(&self, value: Self::Value, context: &mut ValidationContext) -> Result<Self::Value, Self::Error> {
+        // Default implementation just validates without updating context
+        self.validate(&value, context)?;
+        Ok(value)
+    }
     
     /// Get the physical constraints for this validator
     /// 
-    /// Used by the system to understand validation bounds for optimization
-    /// and reporting purposes.
+    /// Returns information about valid ranges and rate limits that can be used
+    /// for UI display, documentation, or runtime configuration validation.
     fn constraints(&self) -> ValidatorConstraints;
 }
 

@@ -197,20 +197,21 @@ impl TemperatureValidator {
 
 impl Validator for TemperatureValidator {
     type Value = f32;
+    type Error = ValidationError;
     
-    fn validate(&self, value: Self::Value, context: &ValidationContext) -> ValidationResult<()> {
+    fn validate(&self, value: &Self::Value, context: &ValidationContext) -> ValidationResult<()> {
         // First check: is it even a valid number?
-        if !value.is_valid() {
+        if !(*value).is_valid() {
             return Err(ValidationError::InvalidValue);
         }
         
         // Range check against physical limits
-        utils::check_range(value, self.min_celsius, self.max_celsius)?;
+        utils::check_range(*value, self.min_celsius, self.max_celsius)?;
         
         // Rate of change check (if we have history)
         if let Some(last_reading) = utils::last_reading(&context.history) {
             let rate = utils::calculate_rate_from_readings(
-                value,
+                *value,
                 context.timestamp,
                 last_reading,
             );

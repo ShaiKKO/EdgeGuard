@@ -334,20 +334,21 @@ impl PressureValidator {
 
 impl Validator for PressureValidator {
     type Value = f32;
+    type Error = ValidationError;
     
-    fn validate(&self, value: Self::Value, context: &ValidationContext) -> ValidationResult<()> {
+    fn validate(&self, value: &Self::Value, context: &ValidationContext) -> ValidationResult<()> {
         // Check for valid number
-        if !value.is_valid() {
+        if !(*value).is_valid() {
             return Err(ValidationError::InvalidValue);
         }
         
         // Basic range check
-        utils::check_range(value, self.min_hpa, self.max_hpa)?;
+        utils::check_range(*value, self.min_hpa, self.max_hpa)?;
         
         // Rate of change check
         if let Some(last_reading) = utils::last_reading(&context.history) {
             let rate = utils::calculate_rate_from_readings(
-                value,
+                *value,
                 context.timestamp,
                 last_reading,
             );
@@ -362,7 +363,7 @@ impl Validator for PressureValidator {
         
         // Altitude consistency check
         if self.altitude_m != 0.0 {
-            self.validate_altitude_consistency(value)?;
+            self.validate_altitude_consistency(*value)?;
         }
         
         // Sensor quality check

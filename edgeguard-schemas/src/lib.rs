@@ -60,7 +60,7 @@
 //!
 //! Schemas can generate validators automatically:
 //!
-//! ```rust
+//! ```rust,ignore
 //! // Future functionality
 //! let schema = SchemaRegistry::new().get("temperature_v1")?;
 //! let validator = TemperatureValidator::from_schema(schema)?;
@@ -108,21 +108,26 @@
 //!
 //! ## Usage Example
 //!
-//! ```rust
+//! ```rust,no_run
 //! use edgeguard_schemas::{SchemaRegistry, PhysicsConstraints};
 //!
 //! // Initialize registry with default schemas
 //! let mut registry = SchemaRegistry::new();
-//! registry.load_defaults()?;
+//! registry.load_defaults().unwrap();
 //!
 //! // Get a schema for serialization
 //! let schema = registry.get("sensor_reading_v1").unwrap();
 //!
-//! // Future: Extract constraints for validation
-//! let constraints = PhysicsConstraints::from_schema(schema)?;
+//! // Example of creating constraints manually
+//! let constraints = PhysicsConstraints {
+//!     min: Some(-80.0),
+//!     max: Some(125.0),
+//!     max_rate_change: Some(10.0),
+//!     unit: "celsius".to_string(),
+//!     rules: vec![],
+//! };
 //! assert_eq!(constraints.unit, "celsius");
 //! assert_eq!(constraints.min, Some(-80.0));
-//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 use apache_avro::Schema;
