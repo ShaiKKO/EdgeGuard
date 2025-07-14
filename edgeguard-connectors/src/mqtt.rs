@@ -357,8 +357,11 @@ impl MqttConnector {
         state: Arc<Mutex<ConnectorState>>,
     ) {
         loop {
-            let mut eventloop = eventloop.lock().unwrap();
-            match eventloop.poll().await {
+            let poll_result = {
+                let mut eventloop = eventloop.lock().unwrap();
+                eventloop.poll().await
+            };
+            match poll_result {
                 Ok(Event::Incoming(Packet::ConnAck(_))) => {
                     let mut state = state.lock().unwrap();
                     state.connected = true;
@@ -387,12 +390,21 @@ impl MqttConnector {
     
     /// Process message batch
     async fn process_batch(client: &AsyncClient, state: &Arc<Mutex<ConnectorState>>) {
-        let mut state = state.lock().unwrap();
+        let (batch, payload_len) = {
+            let mut state = state.lock().unwrap();
+            
+            if let Some(batch) = state.pending_batch.take() {
+                let batch_payload = Self::serialize_batch(&batch);
+                let payload_len = batch_payload.len();
+                (Some((batch, batch_payload)), payload_len)
+            } else {
+                (None, 0)
+            }
+        };
         
-        if let Some(batch) = state.pending_batch.take() {
+        if let Some((batch, batch_payload)) = batch {
             // Create batch payload
             let batch_topic = "batch/sensor_data";
-            let batch_payload = Self::serialize_batch(&batch);
             
             // Send batch
             match client.publish(
@@ -402,10 +414,12 @@ impl MqttConnector {
                 batch_payload,
             ).await {
                 Ok(_) => {
+                    let mut state = state.lock().unwrap();
                     state.stats.messages_sent += batch.messages.len() as u64;
-                    state.stats.bytes_sent += batch_payload.len() as u64;
+                    state.stats.bytes_sent += payload_len as u64;
                 }
-                Err(e) => {
+                Err(_e) => {
+                    let mut state = state.lock().unwrap();
                     state.stats.messages_failed += batch.messages.len() as u64;
                     // Re-queue messages
                     for msg in batch.messages {

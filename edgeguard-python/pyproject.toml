@@ -1,0 +1,93 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "edgeguard"
+description = "Physics-aware data validation and aggregation for IoT edge devices"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "EdgeGuard Contributors", email = "info@edgeguard.io"},
+]
+keywords = ["iot", "sensors", "validation", "edge", "physics", "embedded"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Hardware",
+    "Topic :: Software Development :: Embedded Systems",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "typing-extensions>=4.0.0; python_version<'3.10'",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-benchmark>=4.0",
+    "black>=22.0",
+    "mypy>=1.0",
+    "ruff>=0.1.0",
+]
+ml = [
+    "numpy>=1.20.0",
+    "pandas>=1.3.0",
+    "scikit-learn>=1.0.0",
+]
+visualization = [
+    "matplotlib>=3.5.0",
+    "plotly>=5.0.0",
+    "jupyter>=1.0.0",
+]
+async = [
+    "asyncio-mqtt>=0.11.0",
+    "aiohttp>=3.8.0",
+]
+
+[project.urls]
+Homepage = "https://edgeguard.io"
+Repository = "https://github.com/edgeguard/edgeguard"
+Documentation = "https://docs.edgeguard.io/python"
+"Bug Tracker" = "https://github.com/edgeguard/edgeguard/issues"
+
+[tool.maturin]
+python-source = "python"
+module-name = "edgeguard._edgeguard"
+features = ["pyo3/extension-module"]
+
+[tool.mypy]
+files = "python/"
+python_version = "3.8"
+strict = true
+warn_unreachable = true
+
+[tool.ruff]
+target-version = "py38"
+line-length = 88
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "C",  # flake8-comprehensions
+    "B",  # flake8-bugbear
+]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

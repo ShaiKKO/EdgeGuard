@@ -25,7 +25,7 @@ ureq = { version = "2.10", optional = true }
 base64 = { version = "0.22", optional = true }
 
 # Async runtime (only with std)
-tokio = { version = "1.40", features = ["rt", "time"], optional = true }
+tokio = { version = "1.40", features = ["rt", "time", "sync"], optional = true }
 async-trait = { version = "0.1", optional = true }
 
 [features]

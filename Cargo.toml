@@ -5,6 +5,7 @@ members = [
     "edgeguard-schemas", 
     "edgeguard-ml",
     "edgeguard-connectors",
+    "edgeguard-python",
 ]
 
 [workspace.package]
