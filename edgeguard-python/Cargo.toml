@@ -19,7 +19,7 @@ crate-type = ["cdylib"]
 edgeguard-core = { path = "../edgeguard-core", features = ["std"] }
 edgeguard-ml = { path = "../edgeguard-ml", features = ["std"] }
 edgeguard-schemas = { path = "../edgeguard-schemas" }
-# edgeguard-connectors = { path = "../edgeguard-connectors" }  # TODO: Fix and re-enable
+edgeguard-connectors = { path = "../edgeguard-connectors" }
 
 # Python bindings
 pyo3 = { version = "0.20", features = ["extension-module", "abi3-py38"] }
