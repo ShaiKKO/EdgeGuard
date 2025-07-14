@@ -398,7 +398,7 @@ async fn ml_inference_task() {
                 let (is_anomaly, anomaly_score) = anomaly_detector.detect(&mut features);
                 
                 if is_anomaly {
-                    rprintln!("⚠️  Anomaly detected! Score: {:.3}", anomaly_score);
+                    rprintln!("Anomaly detected! Score: {:.3}", anomaly_score);
                     
                     // In production, might trigger:
                     // - Extended logging
@@ -418,7 +418,7 @@ async fn ml_inference_task() {
                         let (gesture, confidence) = gesture_recognizer.recognize(&ACCEL_BUFFER);
                         
                         if gesture != Gesture::None && confidence > 0.8 {
-                            rprintln!("🖐️  Gesture detected: {:?} (conf: {:.2})", gesture, confidence);
+                            rprintln!("Gesture detected: {:?} (conf: {:.2})", gesture, confidence);
                             
                             // Handle gesture commands
                             match gesture {

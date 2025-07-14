@@ -97,6 +97,35 @@
 
 use core::ops::{Add, Mul};
 
+use crate::constants::{
+    fusion::{
+        FIXED_POINT_SCALE, CONFIDENCE_MIN_FIXED, CONFIDENCE_MAX_FIXED,
+        CONFIDENCE_MODERATE_FIXED, CONFIDENCE_HIGH_FIXED,
+        GEOMETRIC_MEAN_PENALTY_NUMERATOR, GEOMETRIC_MEAN_PENALTY_DENOMINATOR,
+        NEWTON_METHOD_ITERATIONS, NEWTON_METHOD_FACTOR,
+        EXP_APPROX_QUADRATIC_COEFF, EXP_APPROX_QUARTIC_COEFF,
+        CHI_SQUARED_1D, CHI_SQUARED_2D, CHI_SQUARED_3D, CHI_SQUARED_4D, CHI_SQUARED_5D,
+        WILSON_HILFERTY_COEFFICIENT, OUTLIER_THRESHOLD_SIGMA,
+        VARIANCE_RATIO_THRESHOLD_1, VARIANCE_RATIO_THRESHOLD_2, VARIANCE_RATIO_THRESHOLD_3,
+        CONFIDENCE_AT_RATIO_0_5, CONFIDENCE_AT_RATIO_1_0, CONFIDENCE_AT_RATIO_2_0,
+        CONFIDENCE_DECAY_RATE_1, CONFIDENCE_DECAY_RATE_2, CONFIDENCE_DECAY_RATE_3,
+        CONFIDENCE_DECAY_RATE_4, CONVERGENCE_DIVISOR,
+        ENV_TEMP_OPTIMAL_MIN, ENV_TEMP_OPTIMAL_MAX, ENV_TEMP_EXTENDED_MIN, ENV_TEMP_EXTENDED_MAX,
+        ENV_HUMIDITY_OPTIMAL_MIN, ENV_HUMIDITY_OPTIMAL_MAX, ENV_HUMIDITY_EXTENDED_MIN,
+        ENV_HUMIDITY_EXTENDED_MAX, ENV_ALTITUDE_LOW_THRESHOLD, ENV_ALTITUDE_HIGH_THRESHOLD,
+        ENV_CONFIDENCE_OPTIMAL, ENV_CONFIDENCE_EXTENDED, ENV_CONFIDENCE_EXTREME,
+        ENV_CONFIDENCE_HUMIDITY_EXTENDED, ENV_CONFIDENCE_HUMIDITY_EXTREME,
+        ENV_CONFIDENCE_PRESSURE_EXTREME, ENV_CONFIDENCE_ALTITUDE_EXTREME,
+        ENV_PRESSURE_OPTIMAL_MIN, ENV_PRESSURE_OPTIMAL_MAX,
+        CROSS_VALIDATION_EXCELLENT_THRESHOLD, CROSS_VALIDATION_GOOD_THRESHOLD,
+        CROSS_VALIDATION_MARGINAL_THRESHOLD, CROSS_VALIDATION_EXCELLENT_CONFIDENCE,
+        CROSS_VALIDATION_GOOD_START_CONFIDENCE, CROSS_VALIDATION_GOOD_DECAY_RATE,
+        CROSS_VALIDATION_MARGINAL_START_CONFIDENCE, CROSS_VALIDATION_MARGINAL_DECAY_RATE,
+        CROSS_VALIDATION_POOR_CONFIDENCE, ENV_FACTOR_COUNT,
+    },
+    physics::{STORM_PRESSURE_MIN_HPA, HIGH_PRESSURE_MAX_HPA},
+};
+
 /// Confidence score in range [0, 1]
 /// 
 /// Internally stored as fixed-point for efficiency and determinism.
@@ -109,31 +138,31 @@ pub struct ConfidenceScore {
 
 impl ConfidenceScore {
     /// Minimum meaningful confidence (1%)
-    pub const MIN_CONFIDENCE: Self = Self { value: 655 };
+    pub const MIN_CONFIDENCE: Self = Self { value: CONFIDENCE_MIN_FIXED };
     
     /// Maximum confidence (100%)
-    pub const MAX_CONFIDENCE: Self = Self { value: 65535 };
+    pub const MAX_CONFIDENCE: Self = Self { value: CONFIDENCE_MAX_FIXED };
     
     /// No confidence (0%)
     pub const ZERO: Self = Self { value: 0 };
     
     /// Moderate confidence (50%)
-    pub const MODERATE: Self = Self { value: 32768 };
+    pub const MODERATE: Self = Self { value: CONFIDENCE_MODERATE_FIXED };
     
     /// High confidence threshold (90%)
-    pub const HIGH_THRESHOLD: Self = Self { value: 58982 };
+    pub const HIGH_THRESHOLD: Self = Self { value: CONFIDENCE_HIGH_FIXED };
     
     /// Create from floating point value [0, 1]
     pub fn from_float(confidence: f32) -> Self {
         let clamped = confidence.max(0.0).min(1.0);
         Self {
-            value: (clamped * 65535.0) as u16,
+            value: (clamped * FIXED_POINT_SCALE) as u16,
         }
     }
     
     /// Convert to floating point [0, 1]
     pub fn as_float(&self) -> f32 {
-        self.value as f32 / 65535.0
+        self.value as f32 / FIXED_POINT_SCALE
     }
     
     /// Get raw fixed-point value
@@ -178,8 +207,8 @@ impl ConfidenceScore {
         let mean_value = (sum / scores.len() as u32) as u16;
         
         // Apply penalty to account for overestimation vs geometric mean
-        // 61/64 ≈ 0.953, derived from empirical analysis of typical score distributions
-        let adjusted = ((mean_value as u32 * 61) / 64) as u16;
+        // Conservative adjustment factor derived from empirical analysis
+        let adjusted = ((mean_value as u32 * GEOMETRIC_MEAN_PENALTY_NUMERATOR) / GEOMETRIC_MEAN_PENALTY_DENOMINATOR) as u16;
         
         Self { value: adjusted }
     }
@@ -213,7 +242,7 @@ impl Add for ConfidenceScore {
     fn add(self, other: Self) -> Self {
         // Saturating add
         Self {
-            value: self.value.saturating_add(other.value).min(65535),
+            value: self.value.saturating_add(other.value).min(CONFIDENCE_MAX_FIXED),
         }
     }
 }
@@ -282,8 +311,8 @@ impl<const N: usize> ConfidenceScorer<N> {
         // For variance v, we want sqrt(v)
         // Newton's method: x_n+1 = 0.5 * (x_n + v/x_n)
         let mut sqrt_var = innovation_variance;
-        for _ in 0..3 { // 3 iterations gives good accuracy
-            sqrt_var = 0.5 * (sqrt_var + innovation_variance / sqrt_var);
+        for _ in 0..NEWTON_METHOD_ITERATIONS {
+            sqrt_var = NEWTON_METHOD_FACTOR * (sqrt_var + innovation_variance / sqrt_var);
         }
         
         // Normalized innovation
@@ -298,7 +327,7 @@ impl<const N: usize> ConfidenceScorer<N> {
         // For x in [0, 3]: exp(-0.5x²) ≈ 1 - 0.5x² + 0.125x⁴
         let x_squared = normalized * normalized;
         let x_fourth = x_squared * x_squared;
-        let confidence = (1.0 - 0.5 * x_squared + 0.125 * x_fourth).max(0.0).min(1.0);
+        let confidence = (1.0 - EXP_APPROX_QUADRATIC_COEFF * x_squared + EXP_APPROX_QUARTIC_COEFF * x_fourth).max(0.0).min(1.0);
         
         ConfidenceScore::from_float(confidence)
     }
@@ -333,11 +362,11 @@ impl<const N: usize> ConfidenceScorer<N> {
         // Chi-squared critical values for 95% confidence
         let critical_value = match dimensions {
             0 => return ConfidenceScore::ZERO,
-            1 => 3.84,
-            2 => 5.99,
-            3 => 7.81,
-            4 => 9.49,
-            5 => 11.07,
+            1 => CHI_SQUARED_1D,
+            2 => CHI_SQUARED_2D,
+            3 => CHI_SQUARED_3D,
+            4 => CHI_SQUARED_4D,
+            5 => CHI_SQUARED_5D,
             _ => {
                 // Wilson-Hilferty approximation for higher dimensions
                 // χ²(0.95, n) ≈ n + 2.45√(2n)
@@ -345,10 +374,10 @@ impl<const N: usize> ConfidenceScorer<N> {
                 // Approximate sqrt(2n) using Newton's method
                 let two_n = 2.0 * n;
                 let mut sqrt_2n = n; // Initial guess
-                for _ in 0..3 {
-                    sqrt_2n = 0.5 * (sqrt_2n + two_n / sqrt_2n);
+                for _ in 0..NEWTON_METHOD_ITERATIONS {
+                    sqrt_2n = NEWTON_METHOD_FACTOR * (sqrt_2n + two_n / sqrt_2n);
                 }
-                n + 2.45 * sqrt_2n
+                n + WILSON_HILFERTY_COEFFICIENT * sqrt_2n
             }
         };
         
@@ -394,21 +423,21 @@ impl<const N: usize> ConfidenceScorer<N> {
         variance /= measurements.len() as f32;
         
         // Compare to expected variance using 3-sigma rule
-        if variance > 3.0 * expected_variance {
+        if variance > OUTLIER_THRESHOLD_SIGMA * expected_variance {
             return ConfidenceScore::MIN_CONFIDENCE;
         }
         
         // Map variance ratio to confidence
         // Using piecewise linear approximation of exp(-x)
         let ratio = variance / expected_variance;
-        let confidence = if ratio < 0.5 {
-            1.0 - 0.4 * ratio  // ≈ exp(-0.5) = 0.8 at ratio=0.5
-        } else if ratio < 1.0 {
-            0.8 - 0.4 * (ratio - 0.5)  // ≈ exp(-1) = 0.6 at ratio=1.0
-        } else if ratio < 2.0 {
-            0.6 - 0.3 * (ratio - 1.0)  // ≈ exp(-2) = 0.3 at ratio=2.0
+        let confidence = if ratio < VARIANCE_RATIO_THRESHOLD_1 {
+            1.0 - CONFIDENCE_DECAY_RATE_1 * ratio  // ≈ exp(-0.5) = 0.8 at ratio=0.5
+        } else if ratio < VARIANCE_RATIO_THRESHOLD_2 {
+            CONFIDENCE_AT_RATIO_0_5 - CONFIDENCE_DECAY_RATE_2 * (ratio - VARIANCE_RATIO_THRESHOLD_1)
+        } else if ratio < VARIANCE_RATIO_THRESHOLD_3 {
+            CONFIDENCE_AT_RATIO_1_0 - CONFIDENCE_DECAY_RATE_3 * (ratio - VARIANCE_RATIO_THRESHOLD_2)
         } else {
-            0.3 - 0.1 * (ratio - 2.0)  // Decay to MIN_CONFIDENCE
+            CONFIDENCE_AT_RATIO_2_0 - CONFIDENCE_DECAY_RATE_4 * (ratio - VARIANCE_RATIO_THRESHOLD_3)
         };
         
         ConfidenceScore::from_float(confidence.max(0.0))
@@ -425,7 +454,7 @@ impl<const N: usize> ConfidenceScorer<N> {
         let avg_reliability = sum / N as f32;
         
         // Convergence factor (increases with measurement count)
-        let convergence_factor = (self.measurement_count as f32 / 20.0).min(1.0);
+        let convergence_factor = (self.measurement_count as f32 / CONVERGENCE_DIVISOR).min(1.0);
         
         // Combined confidence
         let confidence = avg_reliability * convergence_factor;
@@ -497,43 +526,43 @@ impl ConfidenceFactors {
         altitude_m: f32,
     ) -> ConfidenceScore {
         // Temperature confidence
-        let temp_conf = if temperature_c >= 0.0 && temperature_c <= 50.0 {
-            1.0 // Optimal range
-        } else if temperature_c >= -20.0 && temperature_c <= 70.0 {
-            0.7 // Extended range
+        let temp_conf = if temperature_c >= ENV_TEMP_OPTIMAL_MIN && temperature_c <= ENV_TEMP_OPTIMAL_MAX {
+            ENV_CONFIDENCE_OPTIMAL // Optimal range
+        } else if temperature_c >= ENV_TEMP_EXTENDED_MIN && temperature_c <= ENV_TEMP_EXTENDED_MAX {
+            ENV_CONFIDENCE_EXTENDED // Extended range
         } else {
-            0.3 // Extreme conditions
+            ENV_CONFIDENCE_EXTREME // Extreme conditions
         };
         
         // Humidity confidence
-        let humidity_conf = if humidity_pct >= 20.0 && humidity_pct <= 80.0 {
-            1.0 // Optimal range
-        } else if humidity_pct >= 10.0 && humidity_pct <= 90.0 {
-            0.8 // Acceptable range
+        let humidity_conf = if humidity_pct >= ENV_HUMIDITY_OPTIMAL_MIN && humidity_pct <= ENV_HUMIDITY_OPTIMAL_MAX {
+            ENV_CONFIDENCE_OPTIMAL // Optimal range
+        } else if humidity_pct >= ENV_HUMIDITY_EXTENDED_MIN && humidity_pct <= ENV_HUMIDITY_EXTENDED_MAX {
+            ENV_CONFIDENCE_HUMIDITY_EXTENDED // Acceptable range
         } else {
-            0.5 // Extreme humidity
+            ENV_CONFIDENCE_HUMIDITY_EXTREME // Extreme humidity
         };
         
         // Pressure confidence (sea level ± 100 hPa)
-        let pressure_conf = if pressure_hpa >= 950.0 && pressure_hpa <= 1050.0 {
-            1.0 // Normal range
-        } else if pressure_hpa >= 850.0 && pressure_hpa <= 1085.0 {
-            0.7 // Storm/high altitude
+        let pressure_conf = if pressure_hpa >= ENV_PRESSURE_OPTIMAL_MIN && pressure_hpa <= ENV_PRESSURE_OPTIMAL_MAX {
+            ENV_CONFIDENCE_OPTIMAL // Normal range
+        } else if pressure_hpa >= STORM_PRESSURE_MIN_HPA && pressure_hpa <= HIGH_PRESSURE_MAX_HPA {
+            ENV_CONFIDENCE_EXTENDED // Storm/high altitude
         } else {
-            0.4 // Extreme conditions
+            ENV_CONFIDENCE_PRESSURE_EXTREME // Extreme conditions
         };
         
         // Altitude confidence
-        let altitude_conf = if altitude_m < 3000.0 {
-            1.0 // Low altitude
-        } else if altitude_m < 5000.0 {
-            0.7 // High altitude
+        let altitude_conf = if altitude_m < ENV_ALTITUDE_LOW_THRESHOLD {
+            ENV_CONFIDENCE_OPTIMAL // Low altitude
+        } else if altitude_m < ENV_ALTITUDE_HIGH_THRESHOLD {
+            ENV_CONFIDENCE_EXTENDED // High altitude
         } else {
-            0.4 // Extreme altitude
+            ENV_CONFIDENCE_ALTITUDE_EXTREME // Extreme altitude
         };
         
         // Combine factors (arithmetic mean)
-        let combined = (temp_conf + humidity_conf + pressure_conf + altitude_conf) / 4.0;
+        let combined = (temp_conf + humidity_conf + pressure_conf + altitude_conf) / ENV_FACTOR_COUNT;
         ConfidenceScore::from_float(combined)
     }
     
@@ -561,14 +590,14 @@ impl ConfidenceFactors {
         let normalized_deviation = deviation / max_allowed_deviation;
         
         // Map deviation to confidence
-        let confidence = if normalized_deviation < 0.5 {
-            1.0 // Excellent agreement
-        } else if normalized_deviation < 1.0 {
-            0.9 - 0.4 * (normalized_deviation - 0.5) // Good agreement
-        } else if normalized_deviation < 2.0 {
-            0.7 - 0.4 * (normalized_deviation - 1.0) // Marginal agreement
+        let confidence = if normalized_deviation < CROSS_VALIDATION_EXCELLENT_THRESHOLD {
+            CROSS_VALIDATION_EXCELLENT_CONFIDENCE // Excellent agreement
+        } else if normalized_deviation < CROSS_VALIDATION_GOOD_THRESHOLD {
+            CROSS_VALIDATION_GOOD_START_CONFIDENCE - CROSS_VALIDATION_GOOD_DECAY_RATE * (normalized_deviation - CROSS_VALIDATION_EXCELLENT_THRESHOLD) // Good agreement
+        } else if normalized_deviation < CROSS_VALIDATION_MARGINAL_THRESHOLD {
+            CROSS_VALIDATION_MARGINAL_START_CONFIDENCE - CROSS_VALIDATION_MARGINAL_DECAY_RATE * (normalized_deviation - CROSS_VALIDATION_GOOD_THRESHOLD) // Marginal agreement
         } else {
-            0.3 // Poor agreement
+            CROSS_VALIDATION_POOR_CONFIDENCE // Poor agreement
         };
         
         ConfidenceScore::from_float(confidence)

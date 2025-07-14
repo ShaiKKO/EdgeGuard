@@ -65,6 +65,15 @@
 
 use crate::{
     time::Timestamp,
+    constants::fusion::{
+        KALMAN_DEFAULT_PROCESS_NOISE, KALMAN_DEFAULT_MEASUREMENT_NOISE,
+        KALMAN_DEFAULT_CONVERGENCE_THRESHOLD, KALMAN_CONFIDENCE_ALPHA,
+        KALMAN_INNOVATION_THRESHOLD, MIN_CONVERGENCE_UPDATES,
+        KALMAN_JACOBIAN_EPSILON, KALMAN_LOW_UNCERTAINTY_THRESHOLD,
+        KALMAN_MEDIUM_UNCERTAINTY_THRESHOLD, KALMAN_LOW_UNCERTAINTY_CONFIDENCE,
+        KALMAN_MEDIUM_UNCERTAINTY_CONFIDENCE, KALMAN_UNCERTAINTY_DECAY_RATE,
+        KALMAN_HIGH_UNCERTAINTY_MULTIPLIER, KALMAN_CONVERGENCE_UPDATE_DIVISOR,
+    },
     fusion::{
         FusionError, FusionResult, FusionAlgorithm,
         confidence::{ConfidenceScore, ConfidenceScorer},
@@ -109,12 +118,12 @@ impl<const N: usize, const M: usize> Default for KalmanConfig<N, M> {
         // Initialize diagonal matrices
         for i in 0..N {
             transition_matrix[i][i] = 1.0;
-            process_noise[i][i] = 0.01;
+            process_noise[i][i] = KALMAN_DEFAULT_PROCESS_NOISE;
             initial_covariance[i][i] = 1.0;
         }
         
         for i in 0..M {
-            measurement_noise[i][i] = 0.1;
+            measurement_noise[i][i] = KALMAN_DEFAULT_MEASUREMENT_NOISE;
         }
         
         // Simple measurement matrix (first M states observed)
@@ -134,7 +143,7 @@ impl<const N: usize, const M: usize> Default for KalmanConfig<N, M> {
             },
             measurement_matrix,
             control_matrix: None,
-            convergence_threshold: 0.01,
+            convergence_threshold: KALMAN_DEFAULT_CONVERGENCE_THRESHOLD,
         }
     }
 }
@@ -221,7 +230,7 @@ impl<const N: usize, const M: usize> KalmanFilter<N, M> {
             state: config.initial_state,
             covariance: config.initial_covariance,
             config,
-            confidence_scorer: ConfidenceScorer::new(0.1, 3.0),
+            confidence_scorer: ConfidenceScorer::new(KALMAN_CONFIDENCE_ALPHA, KALMAN_INNOVATION_THRESHOLD),
             last_timestamp: 0,
             update_count: 0,
             workspace: Default::default(),
@@ -388,16 +397,16 @@ impl<const N: usize, const M: usize> KalmanFilter<N, M> {
         }
         
         // Map trace to confidence (lower trace = higher confidence)
-        let uncertainty_confidence = if trace < 0.1 {
-            1.0
-        } else if trace < 1.0 {
-            0.9 - 0.4 * (trace - 0.1)
+        let uncertainty_confidence = if trace < KALMAN_LOW_UNCERTAINTY_THRESHOLD {
+            KALMAN_LOW_UNCERTAINTY_CONFIDENCE
+        } else if trace < KALMAN_MEDIUM_UNCERTAINTY_THRESHOLD {
+            KALMAN_MEDIUM_UNCERTAINTY_CONFIDENCE - KALMAN_UNCERTAINTY_DECAY_RATE * (trace - KALMAN_LOW_UNCERTAINTY_THRESHOLD)
         } else {
-            0.5 / trace // Asymptotic decrease
+            KALMAN_HIGH_UNCERTAINTY_MULTIPLIER / trace // Asymptotic decrease
         };
         
         // Convergence confidence
-        let convergence_confidence = (self.update_count as f32 / 10.0).min(1.0);
+        let convergence_confidence = (self.update_count as f32 / KALMAN_CONVERGENCE_UPDATE_DIVISOR).min(1.0);
         
         // Combine factors
         let combined = uncertainty_confidence * convergence_confidence;
@@ -475,7 +484,7 @@ impl<const N: usize, const M: usize> FusionAlgorithm<N, M> for KalmanFilter<N, M
             .iter()
             .fold(0.0f32, |max, &u| max.max(u));
         
-        max_uncertainty < self.config.convergence_threshold && self.update_count >= 5
+        max_uncertainty < self.config.convergence_threshold && self.update_count >= MIN_CONVERGENCE_UPDATES
     }
 }
 
@@ -504,7 +513,7 @@ impl<const N: usize, const M: usize> ExtendedKalmanFilter<N, M> {
             kf: KalmanFilter::new(config),
             state_fn,
             measurement_fn,
-            jacobian_epsilon: 1e-6,
+            jacobian_epsilon: KALMAN_JACOBIAN_EPSILON,
         }
     }
     

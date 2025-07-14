@@ -187,6 +187,12 @@ pub enum SchemaError {
     
     #[error("Validation failed: {0}")]
     ValidationError(String),
+    
+    #[error("Invalid schema: {0}")]
+    InvalidSchema(String),
+    
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
 }
 
 /// Physics constraints that can be embedded in Avro schemas

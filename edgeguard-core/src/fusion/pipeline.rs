@@ -55,6 +55,10 @@ use crate::{
     events::{Event, SensorType, ValidationStatus, ConstraintFlags, InlineString},
     pipeline::{PipelineStage, StageOutput, PipelineResult},
     time::Timestamp,
+    constants::fusion::{
+        FUSION_DEFAULT_INTERVAL_MS, MAX_MEASUREMENTS_MAP_SIZE,
+        SIMPLE_AVERAGE_CONFIDENCE, MIN_SENSORS_FOR_FUSION,
+    },
     fusion::{
         FusionAlgorithm, FusionError,
         confidence::ConfidenceScore,
@@ -138,7 +142,7 @@ impl SensorGroup {
             sensors: Vec::new(),
             sensor_type,
             algorithm: FusionAlgorithmType::SimpleAverage,
-            min_sensors: 2,
+            min_sensors: MIN_SENSORS_FOR_FUSION as usize,
         }
     }
     
@@ -176,7 +180,7 @@ pub struct FusionStage {
     /// Sensor groups for fusion
     groups: Vec<SensorGroup, MAX_GROUPS>,
     /// Temporary storage for measurements
-    measurements: FnvIndexMap<InlineString, (f32, Timestamp), 16>,
+    measurements: FnvIndexMap<InlineString, (f32, Timestamp), MAX_MEASUREMENTS_MAP_SIZE>,
     /// Last fusion timestamp for each group
     last_fusion: FnvIndexMap<&'static str, Timestamp, MAX_GROUPS>,
     /// Fusion interval (ms)
@@ -190,7 +194,7 @@ impl FusionStage {
             groups: Vec::new(),
             measurements: FnvIndexMap::new(),
             last_fusion: FnvIndexMap::new(),
-            fusion_interval_ms: 100, // 10Hz default
+            fusion_interval_ms: FUSION_DEFAULT_INTERVAL_MS, // 10Hz default
         }
     }
     
@@ -246,7 +250,7 @@ impl FusionStage {
             FusionAlgorithmType::SimpleAverage => {
                 let sum: f32 = measurements.iter().sum();
                 let avg = sum / measurements.len() as f32;
-                Ok((avg, ConfidenceScore::from_float(0.8)))
+                Ok((avg, ConfidenceScore::from_float(SIMPLE_AVERAGE_CONFIDENCE)))
             }
         };
         
@@ -435,7 +439,7 @@ mod tests {
                 SensorGroup::new("test", SensorType::Temperature)
                     .add_sensor("t1")
                     .add_sensor("t2")
-                    .with_min_sensors(2)
+                    .with_min_sensors(MIN_SENSORS_FOR_FUSION as usize)
             );
         
         // Process first sensor reading
@@ -464,6 +468,6 @@ mod tests {
         assert!(group.contains("p1"));
         assert!(group.contains("p2"));
         assert!(!group.contains("p4"));
-        assert_eq!(group.min_sensors, 2);
+        assert_eq!(group.min_sensors, MIN_SENSORS_FOR_FUSION as usize);
     }
 }

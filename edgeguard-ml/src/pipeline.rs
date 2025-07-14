@@ -371,34 +371,8 @@ impl<const N: usize> MLAnomalyStage<N> {
         }
         
         // Add cross-sensor correlation features if enabled
-        if self.config.enable_correlation && temp_stats.count > 0 && humidity_stats.count > 0 {
-            // Temperature-Humidity correlation features
-            let temp_humidity_diff = temp_stats.mean - humidity_stats.mean;
-            let temp_humidity_ratio = if humidity_stats.mean != 0.0 {
-                temp_stats.mean / humidity_stats.mean
-            } else {
-                0.0
-            };
-            
-            #[cfg(not(feature = "std"))]
-            {
-                let _ = features.push(temp_humidity_diff);
-                let _ = features.push(temp_humidity_ratio);
-            }
-            #[cfg(feature = "std")]
-            {
-                features.push(temp_humidity_diff);
-                features.push(temp_humidity_ratio);
-            }
-            
-            // Add more correlations if pressure is available
-            if pressure_stats.count > 0 {
-                let pressure_temp_product = pressure_stats.mean * temp_stats.mean / 1000.0;
-                #[cfg(not(feature = "std"))]
-                let _ = features.push(pressure_temp_product);
-                #[cfg(feature = "std")]
-                features.push(pressure_temp_product);
-            }
+        if self.config.enable_correlation {
+            self.add_correlation_features(&mut features, &temp_stats, &humidity_stats, &pressure_stats);
         }
         
         // Create sample from features
@@ -426,6 +400,112 @@ impl<const N: usize> MLAnomalyStage<N> {
             elapsed > (interval as u64 * 1000)
         } else {
             false
+        }
+    }
+    
+    /// Add correlation features using existing physics lookups
+    fn add_correlation_features(
+        &self, 
+        features: &mut Vec<f32>,
+        temp_stats: &SensorStats,
+        humidity_stats: &SensorStats,
+        pressure_stats: &SensorStats,
+    ) {
+        // Temperature-Humidity correlations
+        if temp_stats.count > 0 && humidity_stats.count > 0 {
+            // Use existing dew point lookup
+            if let Some(dew_point) = edgeguard_core::lookup::dew_point_lookup(
+                temp_stats.mean, 
+                humidity_stats.mean
+            ) {
+                // Dew point margin - how far we are from condensation
+                let dew_point_margin = temp_stats.mean - dew_point;
+                #[cfg(not(feature = "std"))]
+                let _ = features.push(dew_point_margin);
+                #[cfg(feature = "std")]
+                features.push(dew_point_margin);
+                
+                // Relative dew point depression
+                let dew_point_depression = if temp_stats.mean != 0.0 {
+                    dew_point_margin / temp_stats.mean.abs()
+                } else {
+                    0.0
+                };
+                #[cfg(not(feature = "std"))]
+                let _ = features.push(dew_point_depression);
+                #[cfg(feature = "std")]
+                features.push(dew_point_depression);
+            }
+            
+            // Variance ratio - indicates if sensors are responding similarly
+            let variance_ratio = if humidity_stats.variance > 0.0 {
+                temp_stats.variance / humidity_stats.variance
+            } else {
+                1.0
+            };
+            #[cfg(not(feature = "std"))]
+            let _ = features.push(variance_ratio);
+            #[cfg(feature = "std")]
+            features.push(variance_ratio);
+            
+            // Trend alignment - are both sensors trending in same direction?
+            let trend_alignment = if temp_stats.trend_slope.abs() > 0.01 && humidity_stats.trend_slope.abs() > 0.01 {
+                if (temp_stats.trend_slope > 0.0) == (humidity_stats.trend_slope > 0.0) {
+                    1.0
+                } else {
+                    -1.0
+                }
+            } else {
+                0.0
+            };
+            #[cfg(not(feature = "std"))]
+            let _ = features.push(trend_alignment);
+            #[cfg(feature = "std")]
+            features.push(trend_alignment);
+        }
+        
+        // Pressure correlations
+        if pressure_stats.count > 0 {
+            // Normalized pressure (1013.25 hPa = 1.0)
+            let normalized_pressure = pressure_stats.mean / 1013.25;
+            #[cfg(not(feature = "std"))]
+            let _ = features.push(normalized_pressure);
+            #[cfg(feature = "std")]
+            features.push(normalized_pressure);
+            
+            // Pressure deviation from sea level
+            let pressure_deviation = (pressure_stats.mean - 1013.25).abs() / 1013.25;
+            #[cfg(not(feature = "std"))]
+            let _ = features.push(pressure_deviation);
+            #[cfg(feature = "std")]
+            features.push(pressure_deviation);
+            
+            // Pressure stability score (inverse of std dev)
+            let pressure_stability = 1.0 / (pressure_stats.std_dev + 1.0);
+            #[cfg(not(feature = "std"))]
+            let _ = features.push(pressure_stability);
+            #[cfg(feature = "std")]
+            features.push(pressure_stability);
+            
+            // Temperature-Pressure correlation (simple, for HVAC detection)
+            if temp_stats.count > 0 {
+                let temp_pressure_ratio = temp_stats.mean / (pressure_stats.mean / 10.0);
+                #[cfg(not(feature = "std"))]
+                let _ = features.push(temp_pressure_ratio);
+                #[cfg(feature = "std")]
+                features.push(temp_pressure_ratio);
+            }
+        }
+        
+        // All-sensor stability metric
+        if temp_stats.count > 0 && humidity_stats.count > 0 && pressure_stats.count > 0 {
+            let combined_stability = 1.0 / (
+                temp_stats.std_dev + humidity_stats.std_dev + pressure_stats.std_dev + 1.0
+            );
+            #[cfg(not(feature = "std"))]
+            let _ = features.push(combined_stability);
+            #[cfg(feature = "std")]
+            features.push(combined_stability);
         }
     }
     
@@ -465,9 +545,15 @@ impl<const N: usize> MLAnomalyStage<N> {
         
         // Add correlation features if enabled
         if self.config.enable_correlation {
-            names.push("temp_humidity_diff".to_string());
-            names.push("temp_humidity_ratio".to_string());
-            names.push("pressure_temp_product".to_string());
+            names.push("dew_point_margin".to_string());
+            names.push("dew_point_depression".to_string());
+            names.push("variance_ratio".to_string());
+            names.push("trend_alignment".to_string());
+            names.push("pressure_deviation".to_string());
+            names.push("normalized_pressure".to_string());
+            names.push("pressure_stability".to_string());
+            names.push("temp_pressure_ratio".to_string());
+            names.push("combined_stability".to_string());
         }
         
         names
@@ -486,7 +572,13 @@ impl<const N: usize> MLAnomalyStage<N> {
         let mut total = base_count * sensor_count;
         
         if self.config.enable_correlation {
-            total += 3; // temp_humidity_diff, temp_humidity_ratio, pressure_temp_product
+            // Updated correlation features:
+            // - dew_point_margin, dew_point_depression (2)
+            // - variance_ratio, trend_alignment (2)
+            // - normalized_pressure, pressure_deviation, pressure_stability (3)
+            // - temp_pressure_ratio (1)
+            // - combined_stability (1)
+            total += 9;
         }
         
         total
@@ -733,8 +825,8 @@ mod tests {
         }
         
         let sample = stage.extract_features().unwrap();
-        // Extended features: 10 per sensor * 3 sensors + 3 correlation = 33 features
-        assert_eq!(sample.num_features, 33);
+        // Extended features: 10 per sensor * 3 sensors + 9 correlation = 39 features
+        assert_eq!(sample.num_features, 39);
     }
     
     #[test]
@@ -756,12 +848,13 @@ mod tests {
         let stage = MLAnomalyStage::<10>::new(config);
         
         let names = stage.get_feature_names();
-        assert_eq!(names.len(), 18); // 5 * 3 + 3 correlation features
+        assert_eq!(names.len(), 24); // 5 * 3 + 9 correlation features
         
         // Check some expected names
         assert!(names.contains(&"temp_mean".to_string()));
         assert!(names.contains(&"humidity_std_dev".to_string()));
         assert!(names.contains(&"pressure_rate_of_change".to_string()));
-        assert!(names.contains(&"temp_humidity_diff".to_string()));
+        assert!(names.contains(&"dew_point_margin".to_string()));
+        assert!(names.contains(&"pressure_deviation".to_string()));
     }
 }

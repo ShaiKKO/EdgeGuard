@@ -121,6 +121,16 @@ use alloc::boxed::Box;
 use std::boxed::Box;
 
 use crate::{
+    constants::fusion::{
+        MIN_SENSORS_FOR_FUSION, SINGLE_SENSOR_CONFIDENCE, CONVERGENCE_MEASUREMENT_COUNT,
+        MIN_CONVERGENCE_UPDATES, VARIANCE_CONFIDENCE_DIVISOR, GEOMETRIC_MEAN_PENALTY_NUMERATOR, 
+        GEOMETRIC_MEAN_PENALTY_DENOMINATOR, NEWTON_METHOD_ITERATIONS, NEWTON_METHOD_FACTOR,
+        MATRIX_MIN_DIAGONAL, MATRIX_MAX_CONDITION, MATRIX_SINGULAR_THRESHOLD,
+        MATRIX_MAX_SIZE_INVERT, OUTLIER_THRESHOLD_SIGMA, MAJORITY_THRESHOLD_DIVISOR,
+        VOTING_MIN_VOTES_DEFAULT, VOTING_CONFIDENCE_THRESHOLD, AGREEMENT_EXCELLENT_THRESHOLD,
+        AGREEMENT_GOOD_THRESHOLD, AGREEMENT_GOOD_PENALTY, AGREEMENT_POOR_CONFIDENCE,
+        COMPLEMENTARY_FAST_WEIGHT_DEFAULT, COMPLEMENTARY_SLOW_WEIGHT_DEFAULT,
+    },
     time::Timestamp,
     errors::ValidationError,
 };
@@ -149,8 +159,8 @@ impl From<FusionError> for ValidationError {
     fn from(err: FusionError) -> Self {
         match err {
             FusionError::InsufficientSensors => ValidationError::InsufficientData {
-                required: 2,
-                available: 1,
+                required: MIN_SENSORS_FOR_FUSION,
+                available: 1,  // Assumed to have 1 if insufficient
             },
             FusionError::NumericalInstability => ValidationError::InvalidValue,
             FusionError::SingularMatrix => ValidationError::InvalidValue,
@@ -167,6 +177,11 @@ impl From<FusionError> for ValidationError {
 
 // Re-export fusion algorithm trait
 pub use crate::traits::FusionAlgorithm;
+
+// Re-export fusion constants for submodules
+pub use crate::constants::fusion::{
+    TAYLOR_EXPANSION_THRESHOLD, SCALE_HEIGHT_ATMOSPHERE
+};
 
 /// Simplified weighted average fusion
 /// 
@@ -246,7 +261,7 @@ impl<const M: usize> WeightedAverageFusion<M> {
         // 2. Agreement between sensors
         // 3. Total measurements processed
         let sensor_confidence = (active_sensors as f32) / (M as f32);
-        let convergence_confidence = (self.measurement_count as f32 / 10.0).min(1.0);
+        let convergence_confidence = (self.measurement_count as f32 / CONVERGENCE_MEASUREMENT_COUNT as f32).min(1.0);
         
         // Compute variance of measurements
         let mut variance = 0.0;
@@ -264,10 +279,10 @@ impl<const M: usize> WeightedAverageFusion<M> {
             // Map variance to confidence: low variance = high confidence
             // Using approximation to avoid exp() for no-std compatibility
             // exp(-x) ≈ 1/(1 + x) for small x, bounded to [0,1]
-            let confidence = 1.0 / (1.0 + variance);
+            let confidence = VARIANCE_CONFIDENCE_DIVISOR / (VARIANCE_CONFIDENCE_DIVISOR + variance);
             confidence.max(0.0).min(1.0)
         } else {
-            0.5 // Single sensor, moderate confidence
+            SINGLE_SENSOR_CONFIDENCE // Single sensor, moderate confidence
         };
         
         let overall_confidence = sensor_confidence * convergence_confidence * agreement_confidence;
@@ -296,8 +311,8 @@ impl<const M: usize> Default for WeightedAverageConfig<M> {
         }
         Self {
             weights,
-            min_sensors: (M + 1) / 2, // Majority
-            outlier_threshold: 3.0,
+            min_sensors: (M + 1) / MAJORITY_THRESHOLD_DIVISOR, // Majority
+            outlier_threshold: OUTLIER_THRESHOLD_SIGMA,
         }
     }
 }
@@ -360,7 +375,7 @@ impl<const M: usize> FusionAlgorithm<1, M> for WeightedAverageFusion<M> {
     }
     
     fn has_converged(&self) -> bool {
-        self.measurement_count >= 10
+        self.measurement_count >= CONVERGENCE_MEASUREMENT_COUNT
     }
 }
 
@@ -393,9 +408,9 @@ pub struct ComplementaryConfig {
 impl Default for ComplementaryConfig {
     fn default() -> Self {
         Self {
-            fast_weight: 0.02,
-            slow_weight: 0.98,
-            crossover_freq: 0.1,
+            fast_weight: COMPLEMENTARY_FAST_WEIGHT_DEFAULT,
+            slow_weight: COMPLEMENTARY_SLOW_WEIGHT_DEFAULT,
+            crossover_freq: 0.1,  // 0.1 Hz crossover frequency
         }
     }
 }
@@ -441,12 +456,12 @@ impl FusionAlgorithm<1, 2> for ComplementaryFilter {
         
         // Confidence based on sensor agreement
         let difference = (fast_sensor - slow_sensor).abs();
-        let confidence = if difference < 0.1 {
+        let confidence = if difference < AGREEMENT_EXCELLENT_THRESHOLD {
             1.0
-        } else if difference < 1.0 {
-            1.0 - (difference - 0.1) / 0.9
+        } else if difference < AGREEMENT_GOOD_THRESHOLD {
+            1.0 - (difference - AGREEMENT_EXCELLENT_THRESHOLD) * AGREEMENT_GOOD_PENALTY
         } else {
-            0.5
+            AGREEMENT_POOR_CONFIDENCE
         };
         
         Ok((self.state, ConfidenceScore::from_float(confidence)))
@@ -502,9 +517,9 @@ pub struct VotingConfig {
 impl Default for VotingConfig {
     fn default() -> Self {
         Self {
-            outlier_threshold: 2.0,
-            min_votes: 2,
-            confidence_threshold: 0.7,
+            outlier_threshold: OUTLIER_THRESHOLD_SIGMA,
+            min_votes: VOTING_MIN_VOTES_DEFAULT,
+            confidence_threshold: VOTING_CONFIDENCE_THRESHOLD,
         }
     }
 }
@@ -565,10 +580,10 @@ impl<const M: usize> FusionAlgorithm<1, M> for ConsensusVoting<M> {
         let std_dev = if variance == 0.0 {
             0.0
         } else {
-            // Newton's method approximation (2 iterations is usually enough)
+            // Newton's method approximation
             let mut x = variance;
-            x = (x + variance / x) * 0.5;
-            x = (x + variance / x) * 0.5;
+            x = (x + variance / x) * NEWTON_METHOD_FACTOR;
+            x = (x + variance / x) * NEWTON_METHOD_FACTOR;
             x
         };
         
@@ -593,7 +608,7 @@ impl<const M: usize> FusionAlgorithm<1, M> for ConsensusVoting<M> {
         
         // Calculate confidence
         let vote_ratio = valid_measurements.len() as f32 / active_measurements.len() as f32;
-        let convergence = (self.measurement_count as f32 / 10.0).min(1.0);
+        let convergence = (self.measurement_count as f32 / CONVERGENCE_MEASUREMENT_COUNT as f32).min(1.0);
         let confidence = vote_ratio * convergence;
         
         Ok((consensus, ConfidenceScore::from_float(confidence)))
@@ -614,7 +629,7 @@ impl<const M: usize> FusionAlgorithm<1, M> for ConsensusVoting<M> {
     }
     
     fn has_converged(&self) -> bool {
-        self.measurement_count >= 5
+        self.measurement_count >= MIN_CONVERGENCE_UPDATES
     }
 }
 
@@ -623,6 +638,8 @@ impl<const M: usize> FusionAlgorithm<1, M> for ConsensusVoting<M> {
 /// Provides basic linear algebra operations needed for Kalman filtering
 /// without heap allocation. All operations work on fixed-size arrays.
 pub mod matrix {
+    use super::{NEWTON_METHOD_FACTOR, NEWTON_METHOD_ITERATIONS, MATRIX_MIN_DIAGONAL, 
+                MATRIX_MAX_CONDITION, MATRIX_SINGULAR_THRESHOLD, MATRIX_MAX_SIZE_INVERT};
     /// Matrix type using const generics
     pub type Matrix<const R: usize, const C: usize> = [[f32; C]; R];
     
@@ -681,7 +698,7 @@ pub mod matrix {
     pub fn make_symmetric<const N: usize>(matrix: &mut SquareMatrix<N>) {
         for i in 0..N {
             for j in i+1..N {
-                let avg = (matrix[i][j] + matrix[j][i]) * 0.5;
+                let avg = (matrix[i][j] + matrix[j][i]) * NEWTON_METHOD_FACTOR;
                 matrix[i][j] = avg;
                 matrix[j][i] = avg;
             }
@@ -692,8 +709,6 @@ pub mod matrix {
     /// 
     /// Uses simplified condition number estimation based on diagonal dominance
     pub fn is_well_conditioned<const N: usize>(matrix: &SquareMatrix<N>) -> bool {
-        const MIN_DIAGONAL: f32 = 1e-6;
-        const MAX_CONDITION: f32 = 1e6;
         
         let mut min_diag = f32::INFINITY;
         let mut max_diag = 0.0f32;
@@ -705,12 +720,12 @@ pub mod matrix {
         }
         
         // Check minimum diagonal element
-        if min_diag < MIN_DIAGONAL {
+        if min_diag < MATRIX_MIN_DIAGONAL {
             return false;
         }
         
         // Check condition number estimate
-        if max_diag / min_diag > MAX_CONDITION {
+        if max_diag / min_diag > MATRIX_MAX_CONDITION {
             return false;
         }
         
@@ -769,8 +784,8 @@ pub mod matrix {
             
             // Newton's method for square root (fast convergence)
             let mut sqrt_val = diag_val;
-            for _ in 0..3 { // 3 iterations sufficient for f32 precision
-                sqrt_val = 0.5 * (sqrt_val + diag_val / sqrt_val);
+            for _ in 0..NEWTON_METHOD_ITERATIONS {
+                sqrt_val = NEWTON_METHOD_FACTOR * (sqrt_val + diag_val / sqrt_val);
             }
             l[j][j] = sqrt_val;
             
@@ -802,13 +817,12 @@ pub mod matrix {
         inv: &mut SquareMatrix<N>,
     ) -> bool {
         // Work with fixed maximum size to avoid const generic issues
-        const MAX_N: usize = 16;
-        if N > MAX_N {
+        if N > MATRIX_MAX_SIZE_INVERT {
             return false;
         }
         
         // Create augmented matrix [A | I]
-        let mut aug: [[f32; MAX_N * 2]; MAX_N] = [[0.0; MAX_N * 2]; MAX_N];
+        let mut aug: [[f32; MATRIX_MAX_SIZE_INVERT * 2]; MATRIX_MAX_SIZE_INVERT] = [[0.0; MATRIX_MAX_SIZE_INVERT * 2]; MATRIX_MAX_SIZE_INVERT];
         
         // Copy A to left side, identity to right side
         for i in 0..N {
@@ -832,7 +846,7 @@ pub mod matrix {
             }
             
             // Check for singular matrix
-            if max_val < 1e-10 {
+            if max_val < MATRIX_SINGULAR_THRESHOLD {
                 return false;
             }
             

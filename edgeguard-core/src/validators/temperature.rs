@@ -94,6 +94,12 @@
 //! ```
 
 use crate::{
+    constants::{
+        physics::{ABSOLUTE_ZERO_CELSIUS, AIR_TEMP_MAX_RATE_C_PER_S, SENSOR_THERMAL_TIME_CONSTANT_AIR_S},
+        sensors::{TEMP_SENSOR_MIN_C, TEMP_SENSOR_MAX_C, TEMP_MAX_RATE_C_PER_S,
+                 TEMP_ACCURACY_PROFESSIONAL_C, TEMP_ACCURACY_CONSUMER_C, TEMP_ACCURACY_BUDGET_C},
+        quality::{QUALITY_THRESHOLD_GOOD, QUALITY_THRESHOLD_ACCEPTABLE},
+    },
     errors::{ValidationError, ValidationResult},
     traits::{Validator, ValidatorConstraints, ValidationContext, Validatable},
 };
@@ -150,15 +156,14 @@ pub struct TemperatureValidator {
 impl Default for TemperatureValidator {
     fn default() -> Self {
         Self {
-            // Absolute zero is -273.15°C, but sensors rarely work that cold
-            min_celsius: -80.0,  // Coldest natural Earth temp: -89.2°C Antarctica
+            // Use sensor operating range from constants
+            min_celsius: TEMP_SENSOR_MIN_C,
             
-            // Highest reliable sensor reading before damage
-            max_celsius: 125.0,  // Most sensors fail above this
+            // Maximum sensor operating temperature
+            max_celsius: TEMP_SENSOR_MAX_C,
             
-            // Realistic rate for air temperature changes
-            // Even with direct flame, air temp sensors won't instantly jump
-            max_rate_celsius_per_sec: 10.0,
+            // Maximum rate sensors can reliably track
+            max_rate_celsius_per_sec: TEMP_MAX_RATE_C_PER_S,
         }
     }
 }
@@ -170,7 +175,7 @@ impl TemperatureValidator {
         let (min, max) = if min > max { (max, min) } else { (min, max) };
         
         Self {
-            min_celsius: min.max(-273.15), // Can't go below absolute zero
+            min_celsius: min.max(ABSOLUTE_ZERO_CELSIUS), // Can't go below absolute zero
             max_celsius: max,
             max_rate_celsius_per_sec: max_rate.abs(),
         }
@@ -181,7 +186,7 @@ impl TemperatureValidator {
         Self {
             min_celsius: -10.0,  // Freezer temps
             max_celsius: 50.0,   // Hot equipment room
-            max_rate_celsius_per_sec: 2.0,  // HVAC can't change faster
+            max_rate_celsius_per_sec: AIR_TEMP_MAX_RATE_C_PER_S,  // Physical air heating/cooling limit
         }
     }
     
@@ -225,7 +230,7 @@ impl Validator for TemperatureValidator {
         }
         
         // Sensor quality check
-        if context.sensor_quality < 0.5 {
+        if context.sensor_quality < QUALITY_THRESHOLD_ACCEPTABLE {
             return Err(ValidationError::SensorQualityBad {
                 reason: "Temperature sensor degraded",
             });
@@ -239,7 +244,7 @@ impl Validator for TemperatureValidator {
             min_value: self.min_celsius,
             max_value: self.max_celsius,
             max_rate_change: self.max_rate_celsius_per_sec,
-            noise_threshold: Some(0.1), // ±0.1°C typical sensor noise
+            noise_threshold: Some(TEMP_ACCURACY_PROFESSIONAL_C), // Professional-grade sensor accuracy
         }
     }
 }

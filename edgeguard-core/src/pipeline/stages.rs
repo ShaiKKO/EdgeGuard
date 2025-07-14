@@ -20,11 +20,18 @@ use crate::{
     errors::ValidationError,
     traits::{Validator, ValidationContext},
     time::Timestamp,
+    constants::pipeline::{
+        MAX_ROUTES, MAX_SENSOR_PAIRS, MAX_AGGREGATION_WINDOW,
+        MAX_RECENT_READINGS, CROSS_VALIDATION_TIME_WINDOW_MS,
+        SQRT_EPSILON, SQRT_MAX_ITERATIONS, NEWTON_SQRT_DIVISOR,
+        MIN_STDDEV_SAMPLES, VARIANCE_DIVISOR_OFFSET, MEDIAN_EVEN_DIVISOR,
+        AGG_MIN_INITIAL, AGG_MAX_INITIAL, EMPTY_BUFFER_VALUE, DEFAULT_INTERVAL_MS,
+        DEW_POINT_VALIDATION_MARGIN,
+    },
 };
 
 use super::{
     PipelineStage, PipelineError, PipelineResult, StageOutput,
-    MAX_ROUTES, MAX_SENSOR_PAIRS, MAX_AGGREGATION_WINDOW,
 };
 
 // No need to implement BitOr - we'll use the methods provided
@@ -83,7 +90,7 @@ impl<V: Validator<Value = f32> + Send> ValidationStage<V> {
     }
 }
 
-impl<V: Validator<Value = f32> + Send> PipelineStage for ValidationStage<V> {
+impl<V: Validator<Value = f32, Error = ValidationError> + Send> PipelineStage for ValidationStage<V> {
     fn process(&mut self, event: Event, output: &mut StageOutput) -> PipelineResult<()> {
         // Check if this is a sensor reading we should process
         let should_validate = matches!(&event, 
@@ -114,7 +121,7 @@ impl<V: Validator<Value = f32> + Send> PipelineStage for ValidationStage<V> {
                 };
                 
                 // Validate the reading
-                let status = match self.validator.validate(value, &context) {
+                let status = match self.validator.validate(&value, &context) {
                     Ok(_) => ValidationStatus::Valid,
                     Err(ValidationError::OutOfRange { .. }) => ValidationStatus::OutOfRange,
                     Err(ValidationError::RateExceeded { .. }) => ValidationStatus::RateExceeded,
@@ -266,7 +273,7 @@ pub struct CrossValidationStage {
     /// Configured sensor pairs for cross-validation
     pairs: Vec<CrossValidationPair, MAX_SENSOR_PAIRS>,
     /// Recent readings buffer for each sensor type
-    recent_readings: FnvIndexMap<SensorType, (f32, Timestamp, InlineString), 8>,
+    recent_readings: FnvIndexMap<SensorType, (f32, Timestamp, InlineString), MAX_RECENT_READINGS>,
     /// Time window for considering readings as "recent"
     time_window_ms: u32,
 }
@@ -276,7 +283,7 @@ impl CrossValidationStage {
         Self {
             pairs: Vec::new(),
             recent_readings: FnvIndexMap::new(),
-            time_window_ms: 5000, // 5 seconds default
+            time_window_ms: CROSS_VALIDATION_TIME_WINDOW_MS,
         }
     }
     
@@ -377,7 +384,7 @@ impl PipelineStage for CrossValidationStage {
                     let details = CrossValidationDetails {
                         expected_value: if is_primary { *value } else { other_value },
                         actual_value: if is_primary { other_value } else { *value },
-                        deviation_percent: 0.0, // Could be enhanced
+                        deviation_percent: DEW_POINT_VALIDATION_MARGIN, // Could be enhanced
                     };
                     
                     let primary_id: InlineString;
@@ -455,7 +462,7 @@ impl AggregationStage {
     /// Calculate mean of values
     fn calculate_mean(values: &[f32]) -> f32 {
         if values.is_empty() {
-            return 0.0;
+            return EMPTY_BUFFER_VALUE;
         }
         let sum: f32 = values.iter().sum();
         sum / values.len() as f32
@@ -463,23 +470,24 @@ impl AggregationStage {
     
     /// Calculate standard deviation
     fn calculate_std_dev(values: &[f32], mean: f32) -> f32 {
-        if values.len() < 2 {
-            return 0.0;
+        if values.len() < MIN_STDDEV_SAMPLES {
+            return EMPTY_BUFFER_VALUE;
         }
         let variance: f32 = values.iter()
             .map(|&v| {
                 let diff = v - mean;
                 diff * diff
             })
-            .sum::<f32>() / (values.len() - 1) as f32;
+            .sum::<f32>() / (values.len() - VARIANCE_DIVISOR_OFFSET) as f32;
         // Newton's method for square root
         let mut x = variance;
         let mut last_x = 0.0;
-        let epsilon = 0.001;
+        let mut iterations = 0;
         
-        while (x - last_x).abs() > epsilon {
+        while (x - last_x).abs() > SQRT_EPSILON && iterations < SQRT_MAX_ITERATIONS {
             last_x = x;
-            x = (x + variance / x) / 2.0;
+            x = (x + variance / x) / NEWTON_SQRT_DIVISOR;
+            iterations += 1;
         }
         x
     }
@@ -487,7 +495,7 @@ impl AggregationStage {
     /// Calculate median (requires sorted values)
     fn calculate_median(values: &mut [f32]) -> f32 {
         if values.is_empty() {
-            return 0.0;
+            return EMPTY_BUFFER_VALUE;
         }
         
         // Simple bubble sort for small arrays
@@ -501,7 +509,7 @@ impl AggregationStage {
         
         let mid = values.len() / 2;
         if values.len() % 2 == 0 {
-            (values[mid - 1] + values[mid]) / 2.0
+            (values[mid - 1] + values[mid]) / MEDIAN_EVEN_DIVISOR
         } else {
             values[mid]
         }
@@ -516,8 +524,8 @@ impl AggregationStage {
             
             let result = match self.method {
                 AggregationMethod::Mean => Self::calculate_mean(&buffer.values),
-                AggregationMethod::Min => buffer.values.iter().cloned().fold(f32::INFINITY, f32::min),
-                AggregationMethod::Max => buffer.values.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
+                AggregationMethod::Min => buffer.values.iter().cloned().fold(AGG_MIN_INITIAL, f32::min),
+                AggregationMethod::Max => buffer.values.iter().cloned().fold(AGG_MAX_INITIAL, f32::max),
                 AggregationMethod::Sum => buffer.values.iter().sum(),
                 AggregationMethod::StdDev => {
                     let mean = Self::calculate_mean(&buffer.values);
@@ -537,11 +545,11 @@ impl AggregationStage {
                 let duration = buffer.timestamps.last().unwrap() - buffer.timestamps.first().unwrap();
                 (duration / (buffer.timestamps.len() as u64 - 1)) as u16
             } else {
-                0
+                DEFAULT_INTERVAL_MS
             };
             
-            let min_val = buffer.values.iter().cloned().fold(f32::INFINITY, f32::min);
-            let max_val = buffer.values.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let min_val = buffer.values.iter().cloned().fold(AGG_MIN_INITIAL, f32::min);
+            let max_val = buffer.values.iter().cloned().fold(AGG_MAX_INITIAL, f32::max);
             
             // Create batch event manually
             let batch_event = Some(Event::BatchReading {

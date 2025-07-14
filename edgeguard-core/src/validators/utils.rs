@@ -86,9 +86,12 @@
 //! - **Anomaly scoring**: Statistical deviation from normal
 //! - **Sensor fusion**: Combine multiple sensors for validation
 
-use crate::errors::{ValidationError, ValidationResult};
-use crate::traits::TimestampedReading;
-use crate::buffer::CircularBuffer;
+use crate::{
+    constants::time::MS_PER_SECOND,
+    errors::{ValidationError, ValidationResult},
+    traits::TimestampedReading,
+    buffer::CircularBuffer,
+};
 
 /// Check if a value is within the specified range
 pub fn check_range(value: f32, min: f32, max: f32) -> ValidationResult<()> {
@@ -126,7 +129,7 @@ pub fn calculate_rate(current: f32, previous: f32, time_delta_ms: u64) -> f32 {
     }
     
     let value_delta = (current - previous).abs();
-    value_delta * 1000.0 / time_delta_ms as f32
+    value_delta * MS_PER_SECOND as f32 / time_delta_ms as f32
 }
 
 /// Calculate rate of change from timestamped readings

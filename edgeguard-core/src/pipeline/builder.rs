@@ -17,11 +17,16 @@ use heapless::Vec;
 use crate::{
     events::Event,
     queue::EventQueue,
+    constants::pipeline::{
+        MAX_PIPELINE_STAGES, STAGE_OUTPUT_BUFFER_SIZE,
+        DEFAULT_QUEUE_SIZE_SMALL, DEFAULT_QUEUE_SIZE_MEDIUM, DEFAULT_QUEUE_SIZE_LARGE,
+        MAX_BATCH_PROCESS_EVENTS,
+    },
 };
 
 use super::{
     PipelineStage, PipelineResult, StageOutput,
-    BackpressureStrategy, PipelineMetrics, MAX_PIPELINE_STAGES,
+    BackpressureStrategy, PipelineMetrics,
 };
 
 /// Event processing pipeline
@@ -38,9 +43,9 @@ use super::{
 /// The pipeline uses a fixed-size event queue (N events) which determines
 /// the maximum number of events that can be buffered between processing cycles.
 /// Common sizes:
-/// - N=256: Low-memory devices (32KB systems)
-/// - N=1024: Standard IoT devices  
-/// - N=4096: High-throughput gateways
+/// - N=DEFAULT_QUEUE_SIZE_SMALL (256): Low-memory devices (32KB systems)
+/// - N=DEFAULT_QUEUE_SIZE_MEDIUM (1024): Standard IoT devices  
+/// - N=DEFAULT_QUEUE_SIZE_LARGE (4096): High-throughput gateways
 pub struct Pipeline<const N: usize> {
     /// Processing stages
     stages: Vec<Box<dyn PipelineStage>, MAX_PIPELINE_STAGES>,
@@ -96,11 +101,11 @@ impl<const N: usize> Pipeline<N> {
             };
             
             // Pass through all stages
-            let mut current_events = Vec::<Event, 16>::new();
+            let mut current_events = Vec::<Event, STAGE_OUTPUT_BUFFER_SIZE>::new();
             current_events.push(event).ok();
             
             for (stage_idx, stage) in self.stages.iter_mut().enumerate() {
-                let mut next_events = Vec::<Event, 16>::new();
+                let mut next_events = Vec::<Event, STAGE_OUTPUT_BUFFER_SIZE>::new();
                 
                 // Process each event through this stage
                 for event in &current_events {

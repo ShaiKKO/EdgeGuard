@@ -26,19 +26,23 @@
 //! ### 1. Range Validation
 //! Basic physical limits - what's theoretically possible:
 //! ```rust
-//! // Absolute zero is -273.15°C, but no sensor operates there
-//! const MIN_TEMP: f32 = -100.0;  // Coldest natural temperature on Earth
-//! const MAX_TEMP: f32 = 150.0;   // Above this, most sensors fail
+//! use edgeguard_core::constants::sensors::{TEMP_SENSOR_MIN_C, TEMP_SENSOR_MAX_C};
+//! use edgeguard_core::constants::physics::ABSOLUTE_ZERO_CELSIUS;
+//! 
+//! // Sensor operating range based on commercial datasheets
+//! // TEMP_SENSOR_MIN_C = -80.0°C (industrial sensors)
+//! // TEMP_SENSOR_MAX_C = 125.0°C (sensor survival limit)
 //! ```
 //!
 //! ### 2. Rate-of-Change Validation  
 //! How fast can values physically change:
 //! ```rust
-//! // Air temperature changes slowly due to thermal mass
-//! const MAX_TEMP_RATE: f32 = 5.0;  // °C/second is extreme
+//! use edgeguard_core::constants::sensors::TEMP_MAX_RATE_C_PER_S;
+//! use edgeguard_core::constants::physics::AIR_TEMP_MAX_RATE_C_PER_S;
 //! 
-//! // But small sensors in moving air can change faster
-//! const MAX_TEMP_RATE_FORCED_AIR: f32 = 10.0;  // With fan/wind
+//! // Temperature change rates based on thermal physics
+//! // TEMP_MAX_RATE_C_PER_S = 10.0°C/s (sensor tracking limit)
+//! // AIR_TEMP_MAX_RATE_C_PER_S = 10.0°C/s (physical air heating limit)
 //! ```
 //!
 //! ### 3. Cross-Sensor Validation
@@ -55,8 +59,10 @@
 //! ### 4. Environmental Context
 //! Readings must make sense for the environment:
 //! ```rust
+//! use edgeguard_core::constants::physics::SEA_LEVEL_PRESSURE_HPA;
+//! 
 //! // At 5000m altitude, pressure should be ~540 hPa
-//! // Sea level reading of 1013 hPa would be impossible
+//! // SEA_LEVEL_PRESSURE_HPA = 1013.25 hPa would be impossible at altitude
 //! ```
 //!
 //! ## Sensor-Specific Considerations
@@ -105,19 +111,21 @@
 //!
 //! ```rust
 //! use edgeguard_core::validators::TemperatureValidator;
+//! use edgeguard_core::constants::sensors::TEMP_SENSOR_MIN_C;
+//! use edgeguard_core::constants::physics::WATER_FREEZING_POINT_C;
 //!
 //! // Outdoor sensor in extreme environment
 //! let arctic_validator = TemperatureValidator::new_with_limits(
-//!     -60.0,  // Extreme cold
-//!     40.0,   // Moderate heat  
-//!     2.0     // Slower changes due to insulation
+//!     -60.0,  // Below standard sensor range for arctic conditions
+//!     40.0,   // Moderate heat limit
+//!     2.0     // Slower changes due to thermal mass
 //! );
 //!
 //! // High-temperature industrial sensor
 //! let furnace_validator = TemperatureValidator::new_with_limits(
-//!     0.0,     // No freezing expected
-//!     1000.0,  // Very high temps
-//!     50.0     // Rapid changes possible
+//!     WATER_FREEZING_POINT_C,  // No freezing expected (0°C)
+//!     1000.0,  // Specialized high-temp sensor
+//!     50.0     // Rapid changes in industrial setting
 //! );
 //! ```
 

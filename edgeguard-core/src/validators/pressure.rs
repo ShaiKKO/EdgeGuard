@@ -126,6 +126,13 @@
 //! ```
 
 use crate::{
+    constants::{
+        sensors::{PRESSURE_SENSOR_MIN_HPA, PRESSURE_SENSOR_MAX_HPA, PRESSURE_MAX_RATE_HPA_PER_S,
+                 PRESSURE_ACCURACY_CONSUMER_HPA},
+        physics::{SEA_LEVEL_PRESSURE_HPA, PRESSURE_DROP_PER_100M_HPA, STORM_PRESSURE_MIN_HPA,
+                 HIGH_PRESSURE_MAX_HPA},
+        quality::{QUALITY_THRESHOLD_ACCEPTABLE},
+    },
     errors::{ValidationError, ValidationResult},
     traits::{Validator, ValidatorConstraints, ValidationContext, Validatable},
     lookup::AltitudeTable,
@@ -152,13 +159,13 @@ pub struct PressureValidator {
 impl Default for PressureValidator {
     fn default() -> Self {
         Self {
-            // Lowest ever recorded: 870 hPa (typhoon)
-            min_hpa: 850.0,
+            // Use extreme weather limits from constants
+            min_hpa: STORM_PRESSURE_MIN_HPA - 20.0,  // Add margin below typhoon record
             
-            // Highest ever recorded: 1084 hPa (Siberian high)
-            max_hpa: 1090.0,
+            // Highest pressure with margin
+            max_hpa: HIGH_PRESSURE_MAX_HPA + 5.0,  // Add margin above record high
             
-            // Pressure changes slowly except during severe weather
+            // Maximum rate for severe weather
             max_rate_hpa_per_sec: 0.5,  // ~30 hPa/minute is extreme
             
             // Sea level by default
@@ -179,8 +186,8 @@ impl PressureValidator {
             validator.min_hpa += adjustment;
             validator.max_hpa += adjustment;
         } else {
-            // Fallback to simple approximation
-            let adjustment = (altitude_m / 100.0) * 12.0;
+            // Fallback to simple approximation using constants
+            let adjustment = (altitude_m / 100.0) * PRESSURE_DROP_PER_100M_HPA;
             validator.min_hpa -= adjustment;
             validator.max_hpa -= adjustment;
         }
@@ -192,7 +199,7 @@ impl PressureValidator {
     pub fn high_altitude() -> Self {
         Self {
             min_hpa: 200.0,  // ~12km altitude
-            max_hpa: 1090.0, // Still need sea level max
+            max_hpa: HIGH_PRESSURE_MAX_HPA + 5.0, // Still need sea level max
             max_rate_hpa_per_sec: 2.0, // Rapid altitude changes
             altitude_m: 0.0, // Variable altitude
         }
@@ -305,15 +312,12 @@ impl PressureValidator {
     
     /// Check if pressure makes sense for current altitude
     fn validate_altitude_consistency(&self, pressure: f32) -> ValidationResult<()> {
-        // Standard sea level pressure
-        const STANDARD_PRESSURE: f32 = 1013.25;
-        
         // Calculate expected pressure at our altitude
-        let expected_adjustment = (self.altitude_m / 100.0) * 12.0;
-        let expected_pressure = STANDARD_PRESSURE - expected_adjustment;
+        let expected_adjustment = (self.altitude_m / 100.0) * PRESSURE_DROP_PER_100M_HPA;
+        let expected_pressure = SEA_LEVEL_PRESSURE_HPA - expected_adjustment;
         
         // Allow ±50 hPa for weather variations
-        let tolerance = 50.0;
+        let tolerance = 50.0;  // Weather variation tolerance
         
         if (pressure - expected_pressure).abs() > tolerance {
             // Check if this could be extreme weather
@@ -367,7 +371,7 @@ impl Validator for PressureValidator {
         }
         
         // Sensor quality check
-        if context.sensor_quality < 0.5 {
+        if context.sensor_quality < QUALITY_THRESHOLD_ACCEPTABLE {
             return Err(ValidationError::SensorQualityBad {
                 reason: "Pressure sensor degraded",
             });
@@ -381,7 +385,7 @@ impl Validator for PressureValidator {
             min_value: self.min_hpa,
             max_value: self.max_hpa,
             max_rate_change: self.max_rate_hpa_per_sec,
-            noise_threshold: Some(0.1), // ±0.1 hPa typical sensor noise
+            noise_threshold: Some(PRESSURE_ACCURACY_CONSUMER_HPA), // Consumer-grade sensor accuracy
         }
     }
 }

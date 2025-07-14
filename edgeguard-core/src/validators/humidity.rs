@@ -114,6 +114,12 @@
 //! ```
 
 use crate::{
+    constants::{
+        sensors::{HUMIDITY_SENSOR_MIN_PCT, HUMIDITY_SENSOR_MAX_PCT, HUMIDITY_MAX_RATE_PCT_PER_S,
+                 HUMIDITY_ACCURACY_CONSUMER_PCT},
+        quality::{QUALITY_THRESHOLD_ACCEPTABLE},
+        physics::{DEW_POINT_MARGIN_C, HIGH_TEMP_HUMIDITY_THRESHOLD_C, HIGH_TEMP_MAX_HUMIDITY_PCT},
+    },
     errors::{ValidationError, ValidationResult},
     traits::{Validator, ValidatorConstraints, ValidationContext, Validatable},
     lookup::DEW_POINT_STANDARD,
@@ -138,13 +144,13 @@ impl Default for HumidityValidator {
     fn default() -> Self {
         Self {
             // Allow slight negative for sensor drift
-            min_percent: -2.0,
+            min_percent: HUMIDITY_SENSOR_MIN_PCT - 2.0,  // Account for sensor drift
             
             // Allow slight over 100% for supersaturation
-            max_percent: 102.0,
+            max_percent: HUMIDITY_SENSOR_MAX_PCT + 2.0,  // Account for fog/mist
             
-            // Humidity can change quickly when doors open, AC kicks on, etc
-            max_rate_percent_per_sec: 20.0,
+            // Maximum rate sensors can reliably track
+            max_rate_percent_per_sec: HUMIDITY_MAX_RATE_PCT_PER_S,
         }
     }
 }
@@ -162,9 +168,9 @@ impl HumidityValidator {
     /// Strict validator that enforces 0-100% range
     pub fn strict() -> Self {
         Self {
-            min_percent: 0.0,
-            max_percent: 100.0,
-            max_rate_percent_per_sec: 15.0,
+            min_percent: HUMIDITY_SENSOR_MIN_PCT,
+            max_percent: HUMIDITY_SENSOR_MAX_PCT,
+            max_rate_percent_per_sec: 15.0,  // Slightly stricter than default
         }
     }
     
@@ -218,7 +224,7 @@ impl HumidityValidator {
     fn validate_with_temperature(&self, humidity: f32, temp_c: f32) -> ValidationResult<()> {
         // Physical constraint: dew point can't exceed air temperature
         if let Some(dew_point) = Self::calculate_dew_point(temp_c, humidity) {
-            if dew_point > temp_c + 0.5 {  // 0.5°C margin for sensor error
+            if dew_point > temp_c + DEW_POINT_MARGIN_C {
                 return Err(ValidationError::CrossValidationFailed {
                     reason: "Dew point exceeds air temperature",
                 });
@@ -226,8 +232,8 @@ impl HumidityValidator {
         }
         
         // At freezing, 100% humidity is normal
-        // At 40°C, >80% is unusual outside tropical areas
-        if temp_c > 35.0 && humidity > 85.0 {
+        // At high temps, high humidity is unusual outside tropical areas
+        if temp_c > HIGH_TEMP_HUMIDITY_THRESHOLD_C && humidity > HIGH_TEMP_MAX_HUMIDITY_PCT {
             return Err(ValidationError::CrossValidationFailed {
                 reason: "High humidity at high temperature unlikely",
             });
@@ -272,7 +278,7 @@ impl Validator for HumidityValidator {
         }
         
         // Sensor quality check
-        if context.sensor_quality < 0.5 {
+        if context.sensor_quality < QUALITY_THRESHOLD_ACCEPTABLE {
             return Err(ValidationError::SensorQualityBad {
                 reason: "Humidity sensor degraded",
             });
@@ -286,7 +292,7 @@ impl Validator for HumidityValidator {
             min_value: self.min_percent,
             max_value: self.max_percent,
             max_rate_change: self.max_rate_percent_per_sec,
-            noise_threshold: Some(2.0), // ±2% typical sensor noise
+            noise_threshold: Some(HUMIDITY_ACCURACY_CONSUMER_PCT), // Consumer-grade sensor accuracy
         }
     }
 }

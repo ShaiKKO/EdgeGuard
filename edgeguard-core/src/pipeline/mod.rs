@@ -29,6 +29,10 @@
 use crate::{
     events::Event,
     errors::ValidationError,
+    constants::pipeline::{
+        MAX_PIPELINE_STAGES, MAX_ROUTES, MAX_SENSOR_PAIRS, MAX_AGGREGATION_WINDOW,
+        MAX_STAGE_OUTPUT_EVENTS,
+    },
 };
 use heapless::Vec;
 
@@ -56,17 +60,7 @@ pub use builder::{Pipeline, PipelineBuilder};
 #[cfg(all(feature = "pipeline-stream", feature = "stream-memory"))]
 pub use stream::{StreamProcessor, ProcessingStats, SensorStreamAdapter};
 
-/// Maximum number of stages in a pipeline
-pub const MAX_PIPELINE_STAGES: usize = 16;
-
-/// Maximum number of routes in router stage
-pub const MAX_ROUTES: usize = 8;
-
-/// Maximum number of sensor pairs for cross-validation
-pub const MAX_SENSOR_PAIRS: usize = 4;
-
-/// Maximum window size for aggregation
-pub const MAX_AGGREGATION_WINDOW: usize = 100;
+// Constants are now imported from constants::pipeline module above
 
 /// Pipeline processing error
 #[derive(Debug)]
@@ -125,13 +119,13 @@ pub use crate::traits::PipelineStage;
 /// 
 /// ## Capacity Limit Rationale
 /// 
-/// The buffer is limited to 16 events to ensure bounded memory usage:
-/// - 16 events × 128 bytes/event = 2KB maximum
+/// The buffer is limited to MAX_STAGE_OUTPUT_EVENTS to ensure bounded memory usage:
+/// - MAX_STAGE_OUTPUT_EVENTS (16) × 128 bytes/event = 2KB maximum
 /// - Prevents runaway memory growth from misbehaving stages
 /// - Sufficient for most transformations (1:1 or 1:few mappings)
 pub struct StageOutput {
     /// Fixed-capacity buffer for emitted events
-    events: Vec<Event, 16>,
+    events: Vec<Event, MAX_STAGE_OUTPUT_EVENTS>,
 }
 
 impl StageOutput {

@@ -15,19 +15,26 @@ description = "IoT protocol connectors for EdgeGuard (MQTT, CoAP, HTTP)"
 edgeguard-core = { path = "../edgeguard-core" }
 edgeguard-schemas = { path = "../edgeguard-schemas" }
 serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = "1.0"
 
 # Protocol support (all optional)
 rumqttc = { version = "0.24", optional = true }
 coap-lite = { version = "0.12", optional = true }
+ureq = { version = "2.10", optional = true }
+base64 = { version = "0.22", optional = true }
 
 # Async runtime (only with std)
 tokio = { version = "1.40", features = ["rt", "time"], optional = true }
+async-trait = { version = "0.1", optional = true }
 
 [features]
 default = ["std", "mqtt"]
-std = ["edgeguard-core/std", "tokio"]
+std = ["edgeguard-core/std", "tokio", "async-trait"]
 mqtt = ["rumqttc"]
 coap = ["coap-lite"]
+coap-transport = ["coap", "std"]
+http = ["ureq", "base64", "std"]
 
 [dev-dependencies]
 tokio = { version = "1.40", features = ["full"] }

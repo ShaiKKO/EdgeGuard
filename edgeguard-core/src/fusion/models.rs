@@ -76,6 +76,36 @@ use std::string::String;
 use crate::{
     errors::ValidationError,
     events::SensorType,
+    constants::fusion::{
+        DEFAULT_ROOM_TEMPERATURE, DEFAULT_SEA_LEVEL_PRESSURE,
+        DEFAULT_MODERATE_HUMIDITY, DEFAULT_SEA_LEVEL_ALTITUDE,
+        DEFAULT_THERMAL_MASS, DEFAULT_HEAT_TRANSFER, TEMP_MODEL_NOISE_STD,
+        TEMP_MODEL_MIN, TEMP_MODEL_MAX, TEMP_RANGE_MARGIN,
+        TEMP_OPTIMAL_MIN, TEMP_OPTIMAL_MAX, TEMP_EXTENDED_MIN, TEMP_EXTENDED_MAX,
+        PRESSURE_MODEL_NOISE_STD, PRESSURE_MODEL_MIN, PRESSURE_MODEL_MAX,
+        PRESSURE_CHANGE_RATE, PRESSURE_PROCESS_NOISE_FACTOR,
+        PRESSURE_MEAN_REVERSION_RATE, BAROMETRIC_LAPSE_RATE,
+        STANDARD_ATMOSPHERE_TEMP, BAROMETRIC_EXPONENT, SCALE_HEIGHT_ATMOSPHERE,
+        ALTITUDE_LOW_THRESHOLD, ALTITUDE_HIGH_THRESHOLD,
+        HUMIDITY_MODEL_NOISE_STD, HUMIDITY_HYSTERESIS, HUMIDITY_RESPONSE_TIME,
+        HUMIDITY_EQUILIBRIUM, HUMIDITY_MIN, HUMIDITY_MAX,
+        CONFIDENCE_EXCELLENT, CONFIDENCE_GOOD, CONFIDENCE_MODERATE,
+        CONFIDENCE_FAIR, CONFIDENCE_POOR, CONFIDENCE_CRITICAL,
+        STAT_CONF_DECAY_TEMP, STAT_CONF_DECAY_PRESSURE, STAT_CONF_DECAY_HUMIDITY,
+        STAT_CONF_DECAY_SECONDARY, TAYLOR_EXPANSION_THRESHOLD,
+        PADE_APPROXIMATION_THRESHOLD, TAYLOR_CUBIC_COEFF, PADE_COEFF,
+        PADE_QUADRATIC_COEFF, EXP_LIMIT_MAX, EXP_LIMIT_MIN,
+        EKF_TIME_STEP, EKF_DEFAULT_PROCESS_NOISE, EKF_AMBIENT_PROCESS_NOISE,
+        EKF_COOLING_RATE_NOISE, EKF_VELOCITY_DECAY, HYSTERESIS_TAU,
+        HYSTERESIS_DECAY_FACTOR, TEMP_INITIAL_STATE, TEMP_INITIAL_AMBIENT,
+        COOLING_RATE_INITIAL, TEMP_INITIAL_UNCERTAINTY,
+        AMBIENT_INITIAL_UNCERTAINTY, COOLING_RATE_UNCERTAINTY,
+        ALTITUDE_INITIAL_UNCERTAINTY, VELOCITY_INITIAL_UNCERTAINTY,
+        HUMIDITY_INITIAL_STATE, HUMIDITY_INITIAL_UNCERTAINTY,
+        HUMIDITY_CORRELATION, HYSTERESIS_INITIAL_UNCERTAINTY,
+        MS_PER_HOUR, MS_TO_SECONDS, OUTLIER_THRESHOLD_SIGMA,
+        NEWTON_METHOD_ITERATIONS, NEWTON_METHOD_FACTOR,
+    },
     fusion::confidence::{ConfidenceScore, ConfidenceFactors},
 };
 
@@ -98,10 +128,10 @@ pub struct EnvironmentalConditions {
 impl Default for EnvironmentalConditions {
     fn default() -> Self {
         Self {
-            temperature: 20.0,  // Room temperature
-            pressure: 1013.25,  // Sea level
-            humidity: 50.0,     // Moderate humidity
-            altitude: 0.0,      // Sea level
+            temperature: DEFAULT_ROOM_TEMPERATURE,  // Room temperature
+            pressure: DEFAULT_SEA_LEVEL_PRESSURE,  // Sea level
+            humidity: DEFAULT_MODERATE_HUMIDITY,     // Moderate humidity
+            altitude: DEFAULT_SEA_LEVEL_ALTITUDE,      // Sea level
         }
     }
 }
@@ -132,11 +162,11 @@ impl TemperatureModel {
     pub fn new(sensor_id: &str) -> Self {
         Self {
             sensor_id: String::from(sensor_id),
-            thermal_mass: 10.0,    // Small sensor
-            heat_transfer: 0.1,    // Moderate insulation
-            noise_std: 0.1,        // ±0.1°C noise
-            min_temp: -40.0,       // Typical range
-            max_temp: 85.0,
+            thermal_mass: DEFAULT_THERMAL_MASS,    // Small sensor
+            heat_transfer: DEFAULT_HEAT_TRANSFER,    // Moderate insulation
+            noise_std: TEMP_MODEL_NOISE_STD,        // ±0.1°C noise
+            min_temp: TEMP_MODEL_MIN,       // Typical range
+            max_temp: TEMP_MODEL_MAX,
             self_heating: 0.0,     // No self-heating
         }
     }
@@ -178,21 +208,21 @@ impl SensorModel for TemperatureModel {
         // Newton's law of cooling: dT/dt = -k(T - T_ambient)
         // Discrete approximation: T_new = T + dt × (-k(T - T_ambient))
         
-        let dt_s = dt_ms as f32 / 1000.0;
+        let dt_s = dt_ms as f32 / MS_TO_SECONDS;
         let k = self.heat_transfer / self.thermal_mass;
         
-        // Assume ambient temperature of 20°C if not specified
-        let t_ambient = 20.0;
+        // Assume ambient temperature if not specified
+        let t_ambient = DEFAULT_ROOM_TEMPERATURE;
         
         // Exponential decay toward ambient
         // Using Taylor series approximation for exp(-x)
         // exp(-x) ≈ 1 - x + x²/2 - x³/6 for small x
         let x = k * dt_s;
-        let decay_factor = if x < 0.5 {
-            1.0 - x + x * x * 0.5 - x * x * x / 6.0
+        let decay_factor = if x < TAYLOR_EXPANSION_THRESHOLD {
+            1.0 - x + x * x * PADE_COEFF - x * x * x * TAYLOR_CUBIC_COEFF
         } else {
             // For larger x, use simpler approximation
-            1.0 / (1.0 + x + 0.5 * x * x)
+            1.0 / (1.0 + x + PADE_COEFF * x * x)
         };
         t_ambient + (current_state - t_ambient) * decay_factor
     }
@@ -236,25 +266,25 @@ impl SensorModel for TemperatureModel {
         let error = (measurement - prediction).abs();
         let normalized_error = error / self.noise_std;
         factors.statistical = if normalized_error < 1.0 {
-            ConfidenceScore::from_float(1.0 - normalized_error * 0.2)
-        } else if normalized_error < 3.0 {
-            ConfidenceScore::from_float(0.8 - (normalized_error - 1.0) * 0.3)
+            ConfidenceScore::from_float(1.0 - normalized_error * STAT_CONF_DECAY_TEMP)
+        } else if normalized_error < OUTLIER_THRESHOLD_SIGMA {
+            ConfidenceScore::from_float(CONFIDENCE_MODERATE - (normalized_error - 1.0) * STAT_CONF_DECAY_SECONDARY)
         } else {
             ConfidenceScore::MIN_CONFIDENCE
         };
         
         // Environmental confidence (operating range)
-        let range_factor = if measurement > self.min_temp + 5.0 && measurement < self.max_temp - 5.0 {
-            1.0 // Well within range
+        let range_factor = if measurement > self.min_temp + TEMP_RANGE_MARGIN && measurement < self.max_temp - TEMP_RANGE_MARGIN {
+            CONFIDENCE_EXCELLENT // Well within range
         } else if measurement > self.min_temp && measurement < self.max_temp {
-            0.7 // Near limits
+            CONFIDENCE_FAIR // Near limits
         } else {
-            0.3 // Outside range
+            CONFIDENCE_CRITICAL // Outside range
         };
         factors.environmental = ConfidenceScore::from_float(range_factor);
         
         // Cross-validation placeholder (would check against other temperature sensors)
-        factors.cross_validation = ConfidenceScore::from_float(0.8);
+        factors.cross_validation = ConfidenceScore::from_float(CONFIDENCE_MODERATE);
         
         // Return combined confidence as a single float
         // Use the minimum confidence from all factors as the overall confidence
@@ -449,9 +479,9 @@ impl HumidityModel {
     pub fn new(sensor_id: &str) -> Self {
         Self {
             sensor_id: String::from(sensor_id),
-            noise_std: 2.0,      // ±2% RH noise
-            hysteresis: 1.0,     // ±1% RH hysteresis
-            response_time: 8000.0, // 8 second response
+            noise_std: HUMIDITY_MODEL_NOISE_STD,      // ±2% RH noise
+            hysteresis: HUMIDITY_HYSTERESIS,     // ±1% RH hysteresis
+            response_time: HUMIDITY_RESPONSE_TIME, // 8 second response
         }
     }
 }
@@ -476,18 +506,18 @@ impl SensorModel for HumidityModel {
         let x = (dt_ms as f32) / tau;
         
         // Approximate exp(-x) using Taylor series
-        let decay = if x < 0.5 {
-            1.0 - x + x * x * 0.5 - x * x * x / 6.0
-        } else if x < 2.0 {
+        let decay = if x < TAYLOR_EXPANSION_THRESHOLD {
+            1.0 - x + x * x * PADE_COEFF - x * x * x * TAYLOR_CUBIC_COEFF
+        } else if x < PADE_APPROXIMATION_THRESHOLD {
             // Padé approximation for medium range
-            (1.0 - 0.5 * x) / (1.0 + 0.5 * x)
+            (1.0 - PADE_COEFF * x) / (1.0 + PADE_COEFF * x)
         } else {
             // For large x, exp(-x) ≈ 0
-            0.1
+            STAT_CONF_DECAY_HUMIDITY
         };
         
-        // Assume slow drift toward 50% RH (typical indoor)
-        let equilibrium = 50.0;
+        // Assume slow drift toward typical indoor humidity
+        let equilibrium = HUMIDITY_EQUILIBRIUM;
         equilibrium + (current_state - equilibrium) * decay
     }
     
@@ -497,11 +527,11 @@ impl SensorModel for HumidityModel {
     }
     
     fn validate(&self, measurement: f32) -> Result<(), ValidationError> {
-        if measurement < 0.0 || measurement > 100.0 {
+        if measurement < HUMIDITY_MIN || measurement > HUMIDITY_MAX {
             return Err(ValidationError::OutOfRange {
                 value: measurement,
-                min: 0.0,
-                max: 100.0,
+                min: HUMIDITY_MIN,
+                max: HUMIDITY_MAX,
             });
         }
         
@@ -515,7 +545,7 @@ impl SensorModel for HumidityModel {
     fn compensate(&self, measurement: f32, _env: &dyn core::any::Any) -> f32 {
         // Humidity sensors typically provide temperature-compensated readings
         // Just ensure physical constraints
-        measurement.max(0.0).min(100.0)
+        measurement.max(HUMIDITY_MIN).min(HUMIDITY_MAX)
     }
     
     fn confidence_factors(
@@ -529,27 +559,27 @@ impl SensorModel for HumidityModel {
         // Statistical confidence
         let error = (measurement - prediction).abs();
         let normalized_error = error / self.noise_std;
-        factors.statistical = ConfidenceScore::from_float((1.0 - normalized_error * 0.1).max(0.3));
+        factors.statistical = ConfidenceScore::from_float((1.0 - normalized_error * STAT_CONF_DECAY_HUMIDITY).max(CONFIDENCE_CRITICAL));
         
         // Environmental confidence based on temperature
         // Humidity sensors less accurate at temperature extremes
         let temp_confidence = if let Some(env_cond) = env.downcast_ref::<EnvironmentalConditions>() {
-            if env_cond.temperature > 0.0 && env_cond.temperature < 50.0 {
-                1.0
-            } else if env_cond.temperature > -20.0 && env_cond.temperature < 70.0 {
-                0.7
+            if env_cond.temperature > TEMP_OPTIMAL_MIN && env_cond.temperature < TEMP_OPTIMAL_MAX {
+                CONFIDENCE_EXCELLENT
+            } else if env_cond.temperature > TEMP_EXTENDED_MIN && env_cond.temperature < TEMP_EXTENDED_MAX {
+                CONFIDENCE_FAIR
             } else {
-                0.4
+                CONFIDENCE_POOR
             }
         } else {
             // Default moderate confidence if no environmental data
-            0.8
+            CONFIDENCE_MODERATE
         };
         factors.environmental = ConfidenceScore::from_float(temp_confidence);
         
         // Cross-validation with dew point constraint
-        let dew_point_valid = measurement <= 100.0; // Simplified check
-        factors.cross_validation = ConfidenceScore::from_float(if dew_point_valid { 0.9 } else { 0.3 });
+        let dew_point_valid = measurement <= HUMIDITY_MAX; // Simplified check
+        factors.cross_validation = ConfidenceScore::from_float(if dew_point_valid { CONFIDENCE_GOOD } else { CONFIDENCE_CRITICAL });
         
         // Return combined confidence as a single float
         let overall = factors.statistical.as_float()
@@ -945,6 +975,7 @@ pub mod ekf_models {
         
         /// State transition with coupled environmental physics
         pub fn state_transition(state: &Vector<5>, _control: &Vector<5>) -> Vector<5> {
+            use crate::constants::fusion::{NEWTON_METHOD_ITERATIONS, NEWTON_METHOD_FACTOR, TAYLOR_EXPANSION_THRESHOLD, SCALE_HEIGHT_ATMOSPHERE};
             let temp = state[0];
             let humidity = state[1];
             let pressure = state[2];
@@ -971,9 +1002,9 @@ pub mod ekf_models {
             } else {
                 // Newton's method for ln(pressure_ratio)
                 let mut ln_est = pressure_ratio - 1.0;
-                for _ in 0..3 {
-                    let exp_ln = if ln_est.abs() < 0.5 {
-                        1.0 + ln_est + ln_est * ln_est * 0.5
+                for _ in 0..NEWTON_METHOD_ITERATIONS {
+                    let exp_ln = if ln_est.abs() < TAYLOR_EXPANSION_THRESHOLD {
+                        1.0 + ln_est + ln_est * ln_est * NEWTON_METHOD_FACTOR
                     } else {
                         1.0 + ln_est
                     };
@@ -981,7 +1012,7 @@ pub mod ekf_models {
                 }
                 ln_est
             };
-            let new_altitude = -8400.0 * ln_ratio;
+            let new_altitude = -SCALE_HEIGHT_ATMOSPHERE * ln_ratio;
             
             [
                 temp,                  // Temperature evolves slowly

@@ -154,25 +154,132 @@ impl SensorConstraints {
             cross_validation: vec![],
         }
     }
+    
+    /// Acoustic sensor constraints (decibels SPL)
+    pub fn acoustic_db_spl() -> Self {
+        Self {
+            absolute_min: Some(0.0),      // Threshold of hearing
+            absolute_max: Some(194.0),    // Maximum in air at 1 atm
+            typical_min: Some(20.0),      // Quiet room
+            typical_max: Some(140.0),     // Pain threshold
+            max_rate_change: Some(50.0),  // 50 dB/s for impulse sounds
+            si_unit: "pascal".to_string(),
+            display_unit: "dB_SPL".to_string(),
+            cross_validation: vec![],
+        }
+    }
+    
+    /// Acoustic frequency constraints (Hz)
+    pub fn acoustic_frequency_hz() -> Self {
+        Self {
+            absolute_min: Some(0.0),      // DC
+            absolute_max: Some(100000.0), // Ultrasonic
+            typical_min: Some(20.0),      // Human hearing lower limit
+            typical_max: Some(20000.0),   // Human hearing upper limit
+            max_rate_change: Some(10000.0), // 10 kHz/s for sweeps
+            si_unit: "hertz".to_string(),
+            display_unit: "Hz".to_string(),
+            cross_validation: vec![],
+        }
+    }
+    
+    /// Vibration sensor constraints (g-force acceleration)
+    pub fn vibration_g() -> Self {
+        Self {
+            absolute_min: Some(-100.0),   // Extreme shock
+            absolute_max: Some(100.0),    // Extreme shock
+            typical_min: Some(-10.0),     // Industrial vibration
+            typical_max: Some(10.0),      // Industrial vibration
+            max_rate_change: Some(1000.0), // 1000 g/s for impact
+            si_unit: "m/s2".to_string(),
+            display_unit: "g".to_string(),
+            cross_validation: vec![],
+        }
+    }
+    
+    /// EMF sensor constraints (V/m electric field)
+    pub fn emf_electric_vm() -> Self {
+        Self {
+            absolute_min: Some(0.0),
+            absolute_max: Some(30000.0),  // Near high voltage lines
+            typical_min: Some(0.1),       // Background levels
+            typical_max: Some(300.0),     // Residential exposure limit
+            max_rate_change: Some(100.0), // 100 V/m/s
+            si_unit: "V/m".to_string(),
+            display_unit: "V/m".to_string(),
+            cross_validation: vec![],
+        }
+    }
 }
+
+/// Property key for physics constraints in Avro schemas
+pub const CONSTRAINTS_PROPERTY_KEY: &str = "edgeguard.constraints";
 
 /// Extract constraints from schema custom properties
 /// 
 /// Looks for "edgeguard.constraints" property in Avro schema
-pub fn extract_from_schema(_schema: &apache_avro::Schema) -> Option<SensorConstraints> {
-    // This would parse custom properties from the schema
-    // For now, returning None as it requires schema traversal
-    None
+pub fn extract_from_schema(schema: &apache_avro::Schema) -> Option<SensorConstraints> {
+    match schema {
+        apache_avro::Schema::Record { attributes, .. } => {
+            // Look for our custom property
+            if let Some(value) = attributes.get(CONSTRAINTS_PROPERTY_KEY) {
+                // Deserialize from JSON value
+                serde_json::from_value(value.clone()).ok()
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Embed constraints into schema as custom property
 pub fn embed_in_schema(
-    _schema: &mut apache_avro::Schema,
-    _constraints: &SensorConstraints,
+    schema: &mut apache_avro::Schema,
+    constraints: &SensorConstraints,
 ) -> Result<(), crate::SchemaError> {
-    // This would add constraints as custom properties
-    // Implementation depends on apache-avro API for custom properties
-    Ok(())
+    match schema {
+        apache_avro::Schema::Record { attributes, .. } => {
+            // Serialize constraints to JSON
+            let constraints_json = serde_json::to_value(constraints)
+                .map_err(|e| crate::SchemaError::SerializationError(e.to_string()))?;
+            
+            // Add as custom property
+            attributes.insert(CONSTRAINTS_PROPERTY_KEY.to_string(), constraints_json);
+            Ok(())
+        }
+        _ => Err(crate::SchemaError::InvalidSchema(
+            "Can only embed constraints in Record schemas".to_string()
+        )),
+    }
+}
+
+/// Create a validator from constraints
+pub fn create_validator_from_constraints(
+    constraints: &SensorConstraints,
+    sensor_type: &str,
+) -> Result<Box<dyn edgeguard_core::traits::Validator<Value = f32, Error = edgeguard_core::errors::ValidationError> + Send>, String> {
+    use edgeguard_core::validators::{TemperatureValidator, HumidityValidator, PressureValidator};
+    
+    match sensor_type {
+        "temperature" => {
+            let min = constraints.typical_min.unwrap_or(-80.0) as f32;
+            let max = constraints.typical_max.unwrap_or(125.0) as f32;
+            let rate = constraints.max_rate_change.unwrap_or(10.0) as f32;
+            Ok(Box::new(TemperatureValidator::new_with_limits(min, max, rate)))
+        }
+        "humidity" => {
+            let min = constraints.typical_min.unwrap_or(0.0) as f32;
+            let max = constraints.typical_max.unwrap_or(100.0) as f32;
+            let rate = constraints.max_rate_change.unwrap_or(20.0) as f32;
+            Ok(Box::new(HumidityValidator::new_with_limits(min, max, rate)))
+        }
+        "pressure" => {
+            // For pressure, we use altitude 0 by default
+            Ok(Box::new(PressureValidator::new_with_altitude(0.0)))
+        }
+        _ => Err(format!("No validator available for sensor type: {}", sensor_type)),
+    }
 }
 
 #[cfg(test)]
@@ -202,5 +309,32 @@ mod tests {
         let constraints = SensorConstraints::humidity_percent();
         assert_eq!(constraints.absolute_min, Some(0.0));
         assert_eq!(constraints.absolute_max, Some(100.0));
+    }
+    
+    #[test]
+    fn acoustic_constraints_valid() {
+        let constraints = SensorConstraints::acoustic_db_spl();
+        assert_eq!(constraints.absolute_min, Some(0.0));
+        assert_eq!(constraints.absolute_max, Some(194.0)); // Physical limit in air
+        assert_eq!(constraints.typical_max, Some(140.0));  // Pain threshold
+        assert_eq!(constraints.display_unit, "dB_SPL");
+    }
+    
+    #[test]
+    fn vibration_constraints_symmetric() {
+        let constraints = SensorConstraints::vibration_g();
+        assert_eq!(constraints.absolute_min, Some(-100.0));
+        assert_eq!(constraints.absolute_max, Some(100.0));
+        assert_eq!(constraints.display_unit, "g");
+        // High rate of change for impacts
+        assert_eq!(constraints.max_rate_change, Some(1000.0));
+    }
+    
+    #[test]
+    fn emf_constraints_residential_safety() {
+        let constraints = SensorConstraints::emf_electric_vm();
+        assert_eq!(constraints.typical_max, Some(300.0)); // Residential limit
+        assert_eq!(constraints.si_unit, "V/m");
+        assert!(constraints.absolute_max.unwrap() > constraints.typical_max.unwrap());
     }
 }

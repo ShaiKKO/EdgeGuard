@@ -195,7 +195,7 @@ pub trait Connector {
 /// 
 /// This is the preferred trait for new implementations
 #[cfg(feature = "std")]
-#[async_trait::async_trait]
+#[cfg_attr(feature = "std", async_trait::async_trait)]
 pub trait AsyncConnector: Send {
     type Error;
     
