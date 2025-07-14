@@ -1,9 +1,13 @@
-# EdgeGuard
-
-[![Build Status](https://github.com/example/edgeguard/workflows/CI/badge.svg)](https://github.com/example/edgeguard/actions)
-[![Documentation](https://docs.rs/edgeguard/badge.svg)](https://docs.rs/edgeguard)
-[![Crates.io](https://img.shields.io/crates/v/edgeguard.svg)](https://crates.io/crates/edgeguard)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+<div align="center">
+  <img src="assets/EdgeGard_Logo.png" alt="EdgeGuard Logo" width="300"/>
+  
+  # EdgeGuard
+  
+  [![Build Status](https://github.com/example/edgeguard/workflows/CI/badge.svg)](https://github.com/example/edgeguard/actions)
+  [![Documentation](https://docs.rs/edgeguard/badge.svg)](https://docs.rs/edgeguard)
+  [![Crates.io](https://img.shields.io/crates/v/edgeguard.svg)](https://crates.io/crates/edgeguard)
+  [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+</div>
 
 EdgeGuard is a physics-aware data validation and aggregation library for IoT edge devices. It validates sensor data using physics-based constraints and reduces bandwidth usage by 50-90% through intelligent aggregation.
 
