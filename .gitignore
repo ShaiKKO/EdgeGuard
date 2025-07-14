@@ -73,8 +73,6 @@ build/
 dist/
 *.wasm
 
-# Claude context file
-CLAUDE.md
 
 # MQTT/Network testing
 mosquitto.db
