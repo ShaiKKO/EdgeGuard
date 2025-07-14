@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/EdgeGard_Logo.png" alt="EdgeGuard Logo" width="300"/>
   
-  # EdgeGuard
+  
   
   [![Build Status](https://github.com/example/edgeguard/workflows/CI/badge.svg)](https://github.com/example/edgeguard/actions)
   [![Documentation](https://docs.rs/edgeguard/badge.svg)](https://docs.rs/edgeguard)
