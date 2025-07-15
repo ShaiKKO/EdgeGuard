@@ -19,6 +19,16 @@ This documentation covers EdgeGuard's APIs, architecture, and deployment pattern
 - [Streams](api/streams.md) - Advanced streaming
 - [Time Management](api/time.md) - Time sources and synchronization
 
+### Python API Reference
+- [Python API Overview](api/python/README.md) - Python bindings overview and quick start
+- [Python Validators](api/python/validators.md) - Physics-aware validation with Python interfaces
+- [Python Events](api/python/events.md) - Event system, sensor types, and validation status
+- [Python Pipeline](api/python/pipeline.md) - Event processing pipeline with composable stages
+- [Python Fusion](api/python/fusion.md) - Multi-sensor data fusion algorithms
+- [Python Time](api/python/time.md) - High-precision time management and datetime integration
+- [Python Helpers](api/python/helpers.md) - Convenience functions and utilities
+- [Python Conversion](api/python/conversion.md) - Type conversion and data format utilities
+
 ### System Design
 - [Architecture](guides/architecture.md) - System architecture and design decisions
 - [Deployment](guides/deployment.md) - Production deployment strategies

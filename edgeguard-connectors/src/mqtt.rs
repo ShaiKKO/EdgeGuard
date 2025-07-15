@@ -73,10 +73,10 @@
 use crate::Connector;
 use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS as MqttQoS};
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::{interval, timeout};
 
 /// MQTT Quality of Service levels
@@ -357,26 +357,27 @@ impl MqttConnector {
         state: Arc<Mutex<ConnectorState>>,
     ) {
         loop {
-            let mut eventloop = eventloop.lock().unwrap();
-            match eventloop.poll().await {
+            let poll_result = {
+                let mut eventloop_guard = eventloop.lock().await;
+                eventloop_guard.poll().await
+            };
+            match poll_result {
                 Ok(Event::Incoming(Packet::ConnAck(_))) => {
-                    let mut state = state.lock().unwrap();
+                    let mut state = state.lock().await;
                     state.connected = true;
                     state.stats.reconnections += 1;
-                    drop(state);
                     
                     // TODO: Replay offline messages
                 }
                 Ok(Event::Incoming(Packet::Disconnect)) => {
-                    let mut state = state.lock().unwrap();
+                    let mut state = state.lock().await;
                     state.connected = false;
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    let mut state = state.lock().unwrap();
+                    let mut state = state.lock().await;
                     state.connected = false;
                     state.stats.last_error = Some(e.to_string());
-                    drop(state);
                     
                     // Connection error, event loop will reconnect
                     break;
@@ -387,12 +388,21 @@ impl MqttConnector {
     
     /// Process message batch
     async fn process_batch(client: &AsyncClient, state: &Arc<Mutex<ConnectorState>>) {
-        let mut state = state.lock().unwrap();
+        let (batch, payload_len) = {
+            let mut state = state.lock().await;
+            
+            if let Some(batch) = state.pending_batch.take() {
+                let batch_payload = Self::serialize_batch(&batch);
+                let payload_len = batch_payload.len();
+                (Some((batch, batch_payload)), payload_len)
+            } else {
+                (None, 0)
+            }
+        };
         
-        if let Some(batch) = state.pending_batch.take() {
+        if let Some((batch, batch_payload)) = batch {
             // Create batch payload
             let batch_topic = "batch/sensor_data";
-            let batch_payload = Self::serialize_batch(&batch);
             
             // Send batch
             match client.publish(
@@ -402,10 +412,12 @@ impl MqttConnector {
                 batch_payload,
             ).await {
                 Ok(_) => {
+                    let mut state = state.lock().await;
                     state.stats.messages_sent += batch.messages.len() as u64;
-                    state.stats.bytes_sent += batch_payload.len() as u64;
+                    state.stats.bytes_sent += payload_len as u64;
                 }
-                Err(e) => {
+                Err(_e) => {
+                    let mut state = state.lock().await;
                     state.stats.messages_failed += batch.messages.len() as u64;
                     // Re-queue messages
                     for msg in batch.messages {
@@ -472,7 +484,7 @@ impl MqttConnector {
             timestamp: Instant::now(),
         };
         
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().await;
         
         // If batching is enabled and message is batchable
         if self.config.batch_messages && !retain && qos != QoS::ExactlyOnce {
@@ -506,19 +518,19 @@ impl MqttConnector {
                 self.client.publish(topic, qos.into(), retain, payload),
             ).await {
                 Ok(Ok(_)) => {
-                    let mut state = self.state.lock().unwrap();
+                    let mut state = self.state.lock().await;
                     state.stats.messages_sent += 1;
                     state.stats.bytes_sent += payload.len() as u64;
                     Ok(())
                 }
                 Ok(Err(e)) => {
-                    let mut state = self.state.lock().unwrap();
+                    let mut state = self.state.lock().await;
                     state.stats.messages_failed += 1;
                     state.offline_buffer.push_back(msg);
                     Err(MqttError::PublishError(e.to_string()))
                 }
                 Err(_) => {
-                    let mut state = self.state.lock().unwrap();
+                    let mut state = self.state.lock().await;
                     state.stats.messages_failed += 1;
                     state.offline_buffer.push_back(msg);
                     Err(MqttError::Timeout)
@@ -551,15 +563,31 @@ impl MqttConnector {
     }
     
     /// Get connection statistics
-    pub fn stats(&self) -> ConnectionStats {
-        let state = self.state.lock().unwrap();
+    pub async fn stats(&self) -> ConnectionStats {
+        let state = self.state.lock().await;
         state.stats.clone()
     }
     
+    /// Get connection statistics (sync version)
+    pub fn stats_sync(&self) -> ConnectionStats {
+        match self.state.try_lock() {
+            Ok(state) => state.stats.clone(),
+            Err(_) => ConnectionStats::default(), // Return default if locked
+        }
+    }
+    
     /// Check if connected
-    pub fn is_connected(&self) -> bool {
-        let state = self.state.lock().unwrap();
+    pub async fn is_connected(&self) -> bool {
+        let state = self.state.lock().await;
         state.connected
+    }
+    
+    /// Check if connected (sync version)
+    pub fn is_connected_sync(&self) -> bool {
+        match self.state.try_lock() {
+            Ok(state) => state.connected,
+            Err(_) => false, // Assume disconnected if state is locked
+        }
     }
     
     /// Disconnect gracefully
@@ -585,7 +613,7 @@ impl Connector for MqttConnector {
     }
     
     fn is_connected(&self) -> bool {
-        self.is_connected()
+        self.is_connected_sync()
     }
 }
 

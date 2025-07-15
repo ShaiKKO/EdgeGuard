@@ -4,6 +4,20 @@ EdgeGuard is a physics-aware data validation library for IoT edge devices. This 
 
 ## Installation
 
+### Python Projects
+
+Install EdgeGuard Python bindings:
+
+```bash
+# Install from PyPI (when published)
+pip install edgeguard
+
+# Install from source
+pip install maturin
+maturin build --release
+pip install target/wheels/edgeguard-*.whl
+```
+
 ### Rust Projects
 
 Add EdgeGuard to your `Cargo.toml`:
@@ -38,7 +52,27 @@ edgeguard = { version = "0.1.0", features = ["mqtt", "coap", "http"] }
 
 ## Basic Usage
 
-### Simple Validation
+### Python Quick Start
+
+```python
+import edgeguard as eg
+
+# Create physics-aware temperature validator
+validator = eg.TemperatureValidator() \
+    .with_range(-20.0, 60.0) \
+    .with_rate_limit(5.0)
+
+# Validate sensor reading
+try:
+    valid_temp = validator.validate(23.5)
+    print(f"Valid temperature: {valid_temp}°C")
+except eg.ValidationError as e:
+    print(f"Validation failed: {e}")
+```
+
+### Rust Usage
+
+#### Simple Validation
 
 ```rust
 use edgeguard::{
