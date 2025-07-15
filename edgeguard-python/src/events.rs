@@ -151,7 +151,7 @@ impl PySensorType {
     ///
     /// Returns:
     ///     String representation of the typical unit
-    fn unit(&self) -> &'static str {
+    pub fn unit(&self) -> &'static str {
         match self {
             PySensorType::Temperature => "°C",
             PySensorType::Humidity => "%RH",
@@ -169,7 +169,7 @@ impl PySensorType {
     ///
     /// Returns:
     ///     Tuple of (min, max) typical values
-    fn typical_range(&self) -> (f64, f64) {
+    pub fn typical_range(&self) -> (f64, f64) {
         match self {
             PySensorType::Temperature => (-80.0, 125.0),
             PySensorType::Humidity => (0.0, 100.0),
@@ -232,7 +232,7 @@ impl PyValidationStatus {
     ///
     /// Returns:
     ///     String description of the status
-    fn description(&self) -> &'static str {
+    pub fn description(&self) -> &'static str {
         match self {
             PyValidationStatus::Valid => "Reading passed all validation checks",
             PyValidationStatus::OutOfRange => "Reading outside acceptable range",
@@ -247,7 +247,7 @@ impl PyValidationStatus {
     ///
     /// Returns:
     ///     True if the reading is considered valid
-    fn is_valid(&self) -> bool {
+    pub fn is_valid(&self) -> bool {
         matches!(self, PyValidationStatus::Valid)
     }
 
@@ -255,7 +255,7 @@ impl PyValidationStatus {
     ///
     /// Returns:
     ///     True if the reading indicates a serious problem
-    fn is_critical(&self) -> bool {
+    pub fn is_critical(&self) -> bool {
         matches!(
             self,
             PyValidationStatus::InvalidValue | PyValidationStatus::SensorQualityBad
@@ -334,7 +334,7 @@ impl PySensorReading {
     /// Raises:
     ///     ValueError: If parameters are invalid
     #[new]
-    fn new(
+    pub fn new(
         sensor_id: String,
         sensor_type: PySensorType,
         value: f64,
@@ -406,7 +406,7 @@ impl PySensorReading {
     ///
     /// Returns:
     ///     Dictionary with all reading data
-    fn to_dict(&self, py: Python) -> PyResult<PyObject> {
+    pub fn to_dict(&self, py: Python) -> PyResult<PyObject> {
         let dict = PyDict::new(py);
         dict.set_item("sensor_id", &self.sensor_id)?;
         dict.set_item("sensor_type", self.sensor_type.name())?;
@@ -424,7 +424,7 @@ impl PySensorReading {
     /// Returns:
     ///     New PySensorReading instance
     #[staticmethod]
-    fn from_dict(py: Python, data: &PyDict) -> PyValidationResult<Self> {
+    pub fn from_dict(py: Python, data: &PyDict) -> PyValidationResult<Self> {
         let sensor_id: String = data.get_item("sensor_id")?
             .ok_or_else(|| ErrorConverter::configuration_error("data", "sensor_id key", "missing"))?
             .extract()?;

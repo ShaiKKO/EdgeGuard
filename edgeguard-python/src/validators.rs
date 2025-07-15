@@ -272,7 +272,7 @@ impl PyTemperatureValidator {
         thermal_mass = constants::DEFAULT_THERMAL_MASS_KG,
         ambient_temp = None
     ))]
-    fn new(
+    pub fn new(
         min_temp: f64,
         max_temp: f64,
         max_rate: f64,
@@ -335,7 +335,7 @@ impl PyTemperatureValidator {
     /// Raises:
     ///     ValueError: If input parameters are invalid
     #[pyo3(signature = (value, timestamp = None, quality = None))]
-    fn validate(
+    pub fn validate(
         &self,
         value: f64,
         timestamp: Option<PyTimestamp>,
@@ -563,7 +563,7 @@ impl PyHumidityValidator {
         max_rate = constants::DEFAULT_HUMIDITY_RATE_LIMIT_PCT_PER_S,
         ambient_temp = None
     ))]
-    fn new(
+    pub fn new(
         min_humidity: f64,
         max_humidity: f64,
         max_rate: f64,
@@ -603,7 +603,7 @@ impl PyHumidityValidator {
 
     /// Validate a humidity reading
     #[pyo3(signature = (value, timestamp = None, quality = None))]
-    fn validate(
+    pub fn validate(
         &self,
         value: f64,
         timestamp: Option<PyTimestamp>,
@@ -717,7 +717,7 @@ impl PyPressureValidator {
         max_rate = constants::DEFAULT_PRESSURE_RATE_LIMIT_HPA_PER_S,
         altitude = constants::DEFAULT_ALTITUDE_M
     ))]
-    fn new(
+    pub fn new(
         min_pressure: f64,
         max_pressure: f64,
         max_rate: f64,
@@ -751,7 +751,7 @@ impl PyPressureValidator {
 
     /// Validate a pressure reading
     #[pyo3(signature = (value, timestamp = None, quality = None))]
-    fn validate(
+    pub fn validate(
         &self,
         value: f64,
         timestamp: Option<PyTimestamp>,
